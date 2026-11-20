@@ -1,13 +1,15 @@
 using Stigar.Api.Http;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Stigar.Core.Services;
 
 namespace Stigar.Api.Endpoints.GarminCourses;
 
 internal static class GarminCourseAuthorization
 {
-    private const string AllowedUserId = "11908635";
+    private const string DefaultAllowedUserIds = "11908635";
 
     public static async Task<IResult?> Authorize(
         HttpContext context,
@@ -17,7 +19,11 @@ internal static class GarminCourseAuthorization
         if (user == null)
             return TypedResults.Unauthorized();
 
-        if (!string.Equals(user.Id, AllowedUserId, StringComparison.Ordinal))
+        var configuration = context.RequestServices.GetRequiredService<IConfiguration>();
+        var allowed = (configuration.GetValue<string>("GarminAllowedUserIds") ?? DefaultAllowedUserIds)
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        if (!allowed.Contains(user.Id, StringComparer.Ordinal))
             return TypedResults.StatusCode(StatusCodes.Status403Forbidden);
 
         return null;
