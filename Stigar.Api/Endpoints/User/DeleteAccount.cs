@@ -5,12 +5,18 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Stigar.Core.Jobs;
+using Stigar.Core.Logging;
 using Stigar.Core.Services;
 
 namespace Stigar.Api.Endpoints.User;
 
-public class DeleteAccount(UserAuthenticationService _userAuthService, IBackgroundJobClient jobs)
+public class DeleteAccount(
+    UserAuthenticationService _userAuthService,
+    IBackgroundJobClient jobs,
+    Stigar.Core.Services.StravaClient.AuthenticationApi _authApi,
+    ILogger<DeleteAccount> _logger)
 {
     public static RouteHandlerBuilder Map(IEndpointRouteBuilder app) =>
         app.MapMethods("/api/account", ["DELETE", "OPTIONS"],
@@ -24,6 +30,20 @@ public class DeleteAccount(UserAuthenticationService _userAuthService, IBackgrou
         var user = await _userAuthService.GetUserFromSessionId(context.SessionId());
         if (user == null)
             return TypedResults.Unauthorized();
+
+        // Revoke the Strava grant before enqueuing local deletion. Best effort:
+        // a revoked or unreachable Strava must never stop us deleting locally.
+        try
+        {
+            if (!string.IsNullOrEmpty(user.RefreshToken))
+            {
+                await _authApi.RevokeToken(user.RefreshToken, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not revoke Strava grant for user {UserId}", LogInput.Sanitize(user.Id));
+        }
 
         jobs.EnqueueAccountDelete(new AccountDeleteJob { UserId = user.Id });
 
