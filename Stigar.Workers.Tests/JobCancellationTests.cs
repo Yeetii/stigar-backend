@@ -103,9 +103,36 @@ public class JobCancellationTests
         Assert.Equal(CancellationToken.None, observed);
     }
 
-    private static PerformingContext CreatePerformingContext(IJobCancellationToken cancellationToken)
+    [Fact]
+    public void Performer_ExposesAmbientTokenToJob_AndClearsItAfterwards()
     {
-        var job = Job.FromExpression(() => Console.WriteLine("probe"));
+        using var source = new CancellationTokenSource();
+        var filters = new JobFilterCollection();
+        HangfireInfrastructure.AddJobCancellationServerFilter(filters);
+
+        var performer = new BackgroundJobPerformer(filters, JobActivator.Current, TaskScheduler.Default);
+        var context = CreatePerformingContext(
+            new StubJobCancellationToken(source.Token),
+            Job.FromExpression(() => ProbeJob.CaptureAmbientToken()));
+
+        performer.Perform(context);
+
+        Assert.Equal(source.Token, ProbeJob.CapturedToken);
+        Assert.Equal(CancellationToken.None, JobCancellation.Token);
+    }
+
+    private static class ProbeJob
+    {
+        public static CancellationToken CapturedToken;
+
+        public static void CaptureAmbientToken() => CapturedToken = JobCancellation.Token;
+    }
+
+    private static PerformingContext CreatePerformingContext(
+        IJobCancellationToken cancellationToken,
+        Job? job = null)
+    {
+        job ??= Job.FromExpression(() => Console.WriteLine("probe"));
         var backgroundJob = new BackgroundJob("probe-id", job, DateTime.UtcNow);
         var performContext = new PerformContext(
             storage: null,
