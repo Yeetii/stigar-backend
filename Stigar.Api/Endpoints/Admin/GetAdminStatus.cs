@@ -47,6 +47,8 @@ public class GetAdminStatus(
     IConfiguration configuration,
     ILogger<GetAdminStatus> logger)
 {
+    private static readonly TimeSpan HistoryWindow = TimeSpan.FromDays(30);
+
     public static RouteHandlerBuilder Map(IEndpointRouteBuilder app) =>
         app.MapGet("/api/manage/status",
             (HttpContext context, [FromServices] GetAdminStatus endpoint) => endpoint.Handle(context));
@@ -91,7 +93,7 @@ public class GetAdminStatus(
     {
         try
         {
-            return await historyRepository.GetRecentAsync(TimeSpan.FromHours(24), cancellationToken);
+            return await historyRepository.GetRecentAsync(HistoryWindow, cancellationToken);
         }
         catch (Exception ex)
         {
