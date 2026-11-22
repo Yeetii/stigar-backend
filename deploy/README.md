@@ -43,6 +43,7 @@ left in the runtime path.
   │               /tiles/trails.pmtiles   (publishes 127.0.0.1:8080:80)     │
   │  redis        durable Hangfire storage (AOF, noeviction)                │
   │  postgres     PostgreSQL + PostGIS (domain data, local volume)          │
+  │  adminer      SQL admin UI (loopback 8081, Serve :8444)                 │
   │                                                                         │
   │  worker-schedule  12 crons + backend-polling + recurring-jobs           │
   │                                                  — profile "schedules"  │
@@ -84,6 +85,7 @@ assigned to a role by `WORKER_ROLE`; stores are filesystem/Postgres only.
 | `worker-heavy` | `Backend` | `heavy` | 11 Hangfire queue consumers (never `backend-polling` or `recurring-jobs`) |
 | `redis` | — | — | Durable Hangfire storage |
 | `postgres` | — | — | PostgreSQL + PostGIS |
+| `adminer` | — | — | Tailnet-only SQL admin UI for `postgres` |
 | `pmtiles` | `PmtilesJob` | — | Weekly race-tile build (Hangfire scheduler) |
 
 `deploy/scripts/verify-role-coverage.sh` fails CI if the trigger inventory no
@@ -183,6 +185,31 @@ The public URL becomes `https://<machine>.<tailnet>.ts.net`; remember to update
 the Strava webhook callback and any MCP/Trailscope API base URLs when cutting
 clients over.
 
+### SQL admin UI (Adminer)
+
+Adminer runs inside the `backend` network and connects to `postgres:5432`
+directly, so the database itself never publishes a port. Its host port is
+loopback-only (`127.0.0.1:8081`). Expose it through a **tailnet-only** Tailscale
+Serve listener on a dedicated port. Do **not** attach it to the public Funnel on
+443, and do not touch the existing 8443 routes (Homepage, Obsidian CouchDB and
+Hangfire).
+
+```bash
+# on the server, after `docker compose up -d adminer`
+curl -fsS http://127.0.0.1:8081/ >/dev/null   # must succeed before serving
+sudo tailscale serve --bg --https=8444 http://127.0.0.1:8081
+tailscale serve status
+```
+
+Open `https://<machine>.<tailnet>.ts.net:8444` from any tailnet device and log
+in with **Server** `postgres`, **Username** / **Password** from `POSTGRES_USER` /
+`POSTGRES_PASSWORD` in `/opt/stacks/strava/.env`, and **Database** `POSTGRES_DB`
+(default `strava`). Remove the route later with:
+
+```bash
+sudo tailscale serve --https=8444 http://127.0.0.1:8081 off
+```
+
 ### Local build (optional)
 
 The production compose file only pulls images. To build locally against the
@@ -248,6 +275,8 @@ touch storage.
   to a cache-style eviction policy — queued job state must never be evicted.
 - The stack is internal except for the Funnel front door. Use an SSH tunnel for
   host-level diagnostics.
+- `ADMINER_DEFAULT_SERVER` points at the Compose service name `postgres`; Adminer
+  uses the same `POSTGRES_*` credentials as the API.
 
 ## Monitoring
 
@@ -262,8 +291,11 @@ touch storage.
 - SSH key authentication only; disable password login in `sshd_config`.
 - GitHub Actions deploys go through the Tailscale tailnet from an ephemeral
   `tag:ci` node, authenticated by Tailscale SSH rather than SSH keys.
-- Only `127.0.0.1:8080` is published to the host; the public path is Tailscale
-  Funnel. No other container publishes host ports.
+- Only `127.0.0.1:8080` (API) and `127.0.0.1:8081` (Adminer) are published to the
+  host; the public path is Tailscale Funnel. No other container publishes host
+  ports.
+- Adminer is reachable only on tailnet-only Serve port 8444. Never route it
+  through the public Funnel on 443.
 - Keep `.env` at mode 600 and out of git.
 - Protect the `self-hosted` GitHub Environment with required reviewers if you
   want manual approval before production deploys.

@@ -225,6 +225,27 @@ services:
     mem_limit: ${POSTGRES_MEMORY_LIMIT:-1g}
     cpus: "${POSTGRES_CPUS:-1.0}"
 
+  # ---------------------------------------------------------------------------
+  # Tailnet-only SQL admin UI. Connects to postgres over the backend network,
+  # so the database never publishes a port. The host port is loopback-only and
+  # is exposed through Tailscale Serve, never the public Funnel.
+  # See README.md, "SQL admin UI (Adminer)".
+  # ---------------------------------------------------------------------------
+  adminer:
+    <<: *service
+    image: adminer:6.3.0
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+    expose:
+      - "8080"
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    mem_limit: 256m
+    cpus: "0.5"
+
 networks:
   backend:
     driver: bridge
