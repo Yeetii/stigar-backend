@@ -19,6 +19,6 @@ public sealed class RecurringJobDispatcher(
             ?? throw new InvalidOperationException($"Unknown recurring job '{jobId}'.");
 
         logger.LogInformation("Executing recurring job {JobId}", jobId);
-        await job.ExecuteAsync(CancellationToken.None);
+        await job.ExecuteAsync(JobCancellation.Token);
     }
 }

@@ -61,6 +61,10 @@ public static class HangfireInfrastructure
             }
         });
 
+        // Independent of the console guard above: cancellation must be wired for
+        // every host even when console initialization was already performed.
+        AddJobCancellationServerFilter(GlobalJobFilters.Filters);
+
         services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILoggerProvider, HangfireConsoleLoggerProvider>());
         AddConsoleLoggingFilter(services);
@@ -94,5 +98,20 @@ public static class HangfireInfrastructure
             return;
 
         filters.Add(new JobConsoleServerFilterAttribute());
+    }
+
+    /// <summary>
+    /// Registers the ambient cancellation filter exactly once per process. Unlike
+    /// <c>UseConsole</c> this is idempotent and has no global one-shot guard, so
+    /// multiple host entry points can call <see cref="AddHangfireStorage"/> safely.
+    /// </summary>
+    public static void AddJobCancellationServerFilter(JobFilterCollection filters)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+
+        if (filters.Any(f => f.Instance is JobCancellationServerFilterAttribute))
+            return;
+
+        filters.Add(new JobCancellationServerFilterAttribute());
     }
 }

@@ -24,7 +24,7 @@ public sealed class RaceTilesSchedulerJob(
         {
             using var scope = services.CreateScope();
             var buildService = scope.ServiceProvider.GetRequiredService<RaceFromOrganizersPmtilesBuildService>();
-            await buildService.BuildAsync(writeTransparency: false, CancellationToken.None);
+            await buildService.BuildAsync(writeTransparency: false, JobCancellation.Token);
             logger.LogInformation("Scheduled race PMTiles build completed successfully.");
         }
         catch (Exception ex)
