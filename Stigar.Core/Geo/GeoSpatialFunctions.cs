@@ -57,6 +57,7 @@ public static class GeoSpatialFunctions
         if (string.IsNullOrEmpty(encodedPoints))
             yield break;
 
+        var chars = encodedPoints.ToCharArray();
         int index = 0;
 
         int currentLat = 0;
@@ -65,19 +66,19 @@ public static class GeoSpatialFunctions
         int sum;
         int shifter;
 
-        while (index < encodedPoints.ToCharArray().Length)
+        while (index < chars.Length)
         {
             // calculate next latitude
             sum = 0;
             shifter = 0;
             do
             {
-                next5bits = encodedPoints[index++] - 63;
+                next5bits = chars[index++] - 63;
                 sum |= (next5bits & 31) << shifter;
                 shifter += 5;
-            } while (next5bits >= 32 && index < encodedPoints.ToCharArray().Length);
+            } while (next5bits >= 32 && index < chars.Length);
 
-            if (index >= encodedPoints.ToCharArray().Length)
+            if (index >= chars.Length)
                 break;
 
             currentLat += (sum & 1) == 1 ? ~(sum >> 1) : sum >> 1;
@@ -87,12 +88,12 @@ public static class GeoSpatialFunctions
             shifter = 0;
             do
             {
-                next5bits = encodedPoints[index++] - 63;
+                next5bits = chars[index++] - 63;
                 sum |= (next5bits & 31) << shifter;
                 shifter += 5;
-            } while (next5bits >= 32 && index < encodedPoints.ToCharArray().Length);
+            } while (next5bits >= 32 && index < chars.Length);
 
-            if (index >= encodedPoints.ToCharArray().Length && next5bits >= 32)
+            if (index >= chars.Length && next5bits >= 32)
                 break;
 
             currentLng += (sum & 1) == 1 ? ~(sum >> 1) : sum >> 1;

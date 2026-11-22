@@ -6,7 +6,9 @@ public class BasicSummitsCalculator : ISummitsCalculator
 {
     public IEnumerable<T> FindPointsNearRoute<T>(IEnumerable<(T, Coordinate)> points, string polylineString, int maxIntersectDistance = 50)
     {
-        IEnumerable<Coordinate> polyline = GeoSpatialFunctions.DecodePolyline(polylineString);
+        // Materialize once: the per-point scan below re-enumerates this sequence for every peak.
+        // A lazy DecodePolyline here would decode the whole route once per candidate peak.
+        var polyline = GeoSpatialFunctions.DecodePolyline(polylineString).ToList();
         return FindPointsNearRoute(points, polyline, maxIntersectDistance);
     }
 

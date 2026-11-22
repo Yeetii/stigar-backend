@@ -8,7 +8,8 @@ public class SummitsCalculatorWithBoundingBoxFilter() : ISummitsCalculator
 
     public IEnumerable<T> FindPointsNearRoute<T>(IEnumerable<(T, Coordinate)> points, string polylineString, int maxIntersectDistance = 50)
     {
-        var polyline = GeoSpatialFunctions.DecodePolyline(polylineString);
+        // Materialize once: BasicSummitsCalculator walks the whole route for each candidate peak.
+        var polyline = GeoSpatialFunctions.DecodePolyline(polylineString).ToList();
 
         var max = new Coordinate(double.MinValue, double.MinValue);
         var min = new Coordinate(double.MaxValue, double.MaxValue);

@@ -2,6 +2,7 @@ using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Configs;
 using BenchmarkDotNet.Jobs;
 using BenchmarkDotNet.Running;
+using Stigar.Core.Benchmarks.Summits;
 using Stigar.Core.Geo.SummitsCalculator;
 using Stigar.Core.Models;
 
@@ -216,6 +217,17 @@ public class Program
 {
     public static void Main(string[] args)
     {
-        BenchmarkRunner.Run<SummitsBenchmarks>();
+        Type[] benchmarks =
+        [
+            typeof(SummitsBenchmarks),
+            typeof(SummitsPipelineBenchmarks),
+            typeof(DecodePolylineScalingBenchmark),
+            typeof(SummitCalculationPeakScalingBenchmark),
+        ];
+
+        if (args.Length > 0)
+            BenchmarkSwitcher.FromTypes(benchmarks).Run(args);
+        else
+            BenchmarkRunner.Run(benchmarks);
     }
 }
