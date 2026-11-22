@@ -45,14 +45,18 @@ public sealed class BackendAdminQueries(NpgsqlDataSource dataSource) : IBackendA
         LIMIT @limit
         """;
 
-    private const string ProtectedAreasWithinBoundarySql = """
-        SELECT id, properties,
-               ST_X(ST_Centroid(geom)) AS cx, ST_Y(ST_Centroid(geom)) AS cy
-        FROM protected_areas
-        WHERE ST_Intersects(
-            ST_Centroid(geom),
-            ST_SetSRID(ST_GeomFromGeoJSON(@geom), 4326))
-        ORDER BY id
+    internal const string ProtectedAreasWithinBoundarySql = """
+        WITH boundary AS (
+            SELECT ST_SetSRID(ST_GeomFromGeoJSON(@geom), 4326) AS geom
+        )
+        SELECT p.id, p.properties,
+               ST_X(ST_Centroid(p.geom)) AS cx, ST_Y(ST_Centroid(p.geom)) AS cy
+        FROM protected_areas p, boundary b
+        -- Centroid-in-boundary implies the area's bbox overlaps the boundary's bbox, so this
+        -- prefilter is a superset and lets the GIST index on geom avoid a full table scan.
+        WHERE p.geom && b.geom
+          AND ST_Intersects(ST_Centroid(p.geom), b.geom)
+        ORDER BY p.id
         """;
 
     private const string MissingOsmHighwayIdsSql = """
