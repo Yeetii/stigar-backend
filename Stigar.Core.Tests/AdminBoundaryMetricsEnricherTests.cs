@@ -1,11 +1,64 @@
 using BAMCIS.GeoJSON;
+using Microsoft.Extensions.Logging.Abstractions;
+using Moq;
 using Stigar.Core.Models;
 using Stigar.Core.Services;
+using Stigar.Core.Services.Postgres.Admin;
+using Stigar.Core.Services.Postgres.Spatial;
 
 namespace Stigar.Core.Tests;
 
 public class AdminBoundaryMetricsEnricherTests
 {
+    [Fact]
+    public async Task CalculateMetricsAsync_RejectsCountryCandidateWhoseGeometryDoesNotContainCentroid()
+    {
+        var boundary = CreateBoundary();
+        var centroid = new Coordinate(0, 0); // centre of the default -5..5 square
+
+        var peaks = new Mock<IPeakRepository>();
+        peaks.Setup(r => r.FindWithinRadius(It.IsAny<Coordinate>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var queries = new Mock<IBackendAdminQueries>();
+        queries.Setup(q => q.FindProtectedAreaSummariesWithinBoundary(It.IsAny<Geometry>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var adminBoundaries = new Mock<IAdminBoundaryRepository>();
+        adminBoundaries
+            .Setup(r => r.FindSummariesContainingAnyPoint(
+                It.IsAny<IEnumerable<Coordinate>>(), It.IsAny<int?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new StoredFeatureSummary
+                {
+                    Id = "adminBoundary:2:bogus",
+                    Kind = FeatureKinds.AdminBoundary,
+                    Properties = new Dictionary<string, dynamic> { ["countryCode"] = "ZZ" }
+                }
+            ]);
+        adminBoundaries
+            .Setup(r => r.GetByIds(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new StoredFeature
+                {
+                    Id = "adminBoundary:2:bogus",
+                    Kind = FeatureKinds.AdminBoundary,
+                    X = 0,
+                    Y = 0,
+                    Zoom = 6,
+                    Geometry = CreateSquare(10, 10, 20, 20) // bbox may overlap, but not the centroid
+                }
+            ]);
+
+        var enricher = new AdminBoundaryMetricsEnricher(
+            peaks.Object, adminBoundaries.Object, queries.Object, NullLogger<AdminBoundaryMetricsEnricher>.Instance);
+
+        var metrics = await enricher.CalculateMetricsAsync(boundary);
+
+        Assert.False(metrics.ContainsKey("countryId"));
+        Assert.False(metrics.ContainsKey("countryCode"));
+    }
+
     [Fact]
     public void CalculateMetrics_ReturnsPeakAndProtectedAreaSummaries()
     {

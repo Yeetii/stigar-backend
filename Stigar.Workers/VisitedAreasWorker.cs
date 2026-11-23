@@ -382,16 +382,12 @@ public class VisitedAreasWorker(
 
         if (summaries.Count == 0)
         {
-            _logger.LogDebug("Found 0 admin region candidates via ST_WITHIN");
+            _logger.LogDebug("Found 0 admin region candidates via the bbox prefilter");
             return [];
         }
 
-        if (summaries.Count == 1)
-        {
-            _logger.LogDebug("Found a single admin region candidate via ST_WITHIN; skipping local geometry validation and full boundary fetch.");
-            return summaries;
-        }
-
+        // The bbox prefilter returns a superset, so even a single candidate must be validated
+        // against the full boundary geometry before it can be reported as visited.
         var boundaryDocsById = (await timings.MeasureAsync(
                 "db",
                 () => _adminBoundariesRepository.GetByIds(

@@ -44,21 +44,27 @@ public sealed class AdminBoundaryRepository(NpgsqlDataSource dataSource) : IAdmi
             metrics_version = EXCLUDED.metrics_version
         """;
 
-    // Drive from the point list into a LATERAL index lookup per point, then collapse to one row
-    // per boundary before computing its centroid. Computing ST_Centroid for every point/match
-    // pair dominated the worker's db phase on large level-4 geometries.
+    // One indexed bbox probe over the whole route envelope instead of one ST_Intersects per point.
+    // Large level-4 geometries made each per-point probe cost tens of milliseconds. Returns a
+    // SUPERSET of boundaries that actually contain a point; callers must apply
+    // RouteFeatureMatcher.IsPointInGeometry to the full geometry before using a candidate.
+    // The bbox centre avoids detoasting every geometry just to compute ST_Centroid.
     internal const string ContainingAnySummarySql = """
         SELECT area.id, area.properties,
-               ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
+               (ST_XMin(area.geom) + ST_XMax(area.geom)) / 2 AS cx,
+               (ST_YMin(area.geom) + ST_YMax(area.geom)) / 2 AS cy
         FROM (
-            SELECT DISTINCT ON (match.id) match.id, match.properties, match.geom
-            FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            SELECT DISTINCT ON (ab.id) ab.id, ab.properties, ab.geom
+            FROM (
+                SELECT ST_SetSRID(ST_Envelope(ST_Collect(ST_MakePoint(q.lng, q.lat))), 4326) AS geom
+                FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            ) AS route
             CROSS JOIN LATERAL (
                 SELECT id, properties, geom
                 FROM admin_boundaries ab
                 WHERE (@admin_level IS NULL OR ab.admin_level = @admin_level)
-                  AND ST_Intersects(ab.geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
-            ) AS match
+                  AND ab.geom && route.geom
+            ) AS ab
         ) AS area
         """;
 

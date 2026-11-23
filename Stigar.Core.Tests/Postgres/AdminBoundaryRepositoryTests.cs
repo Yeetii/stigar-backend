@@ -131,6 +131,23 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
     }
 
     [SkippableFact]
+    public async Task FindSummariesContainingAnyPoint_ReturnsBboxCandidatesNotExactContainment()
+    {
+        await fixture.ResetAsync();
+        await InsertBoundaryAsync("admin:hit", 1L, "relation", 4, "Hit", null, 0,
+            """{"type":"Polygon","coordinates":[[[7.88,46.88],[7.92,46.88],[7.92,46.92],[7.88,46.92],[7.88,46.88]]]}""");
+        await InsertBoundaryAsync("admin:between", 2L, "relation", 4, "Between", null, 0,
+            """{"type":"Polygon","coordinates":[[[8.48,46.88],[8.52,46.88],[8.52,46.92],[8.48,46.92],[8.48,46.88]]]}""");
+        await InsertBoundaryAsync("admin:far", 3L, "relation", 4, "Far", null, 0,
+            """{"type":"Polygon","coordinates":[[[9.98,48.98],[10.02,48.98],[10.02,49.02],[9.98,49.02],[9.98,48.98]]]}""");
+
+        var summaries = await new AdminBoundaryRepository(fixture.DataSource)
+            .FindSummariesContainingAnyPoint([new Coordinate(7.9, 46.9), new Coordinate(9.1, 46.9)], 4);
+
+        Assert.Equal(["admin:between", "admin:hit"], summaries.Select(s => s.Id).OrderBy(id => id));
+    }
+
+    [SkippableFact]
     public async Task BulkUpsert_StoresPropertiesAsJsonb()
     {
         await fixture.ResetAsync();

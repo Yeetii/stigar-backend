@@ -26,7 +26,11 @@ public interface IAdminBoundaryRepository
         long epoch,
         CancellationToken cancellationToken = default);
 
-    /// <summary>Lightweight summaries of boundaries containing any of the supplied points.</summary>
+    /// <summary>
+    /// Lightweight summaries of candidate boundaries whose bounds overlap the supplied points'
+    /// envelope. This is a superset: callers must check the full geometry with
+    /// RouteFeatureMatcher.IsPointInGeometry before using a candidate.
+    /// </summary>
     Task<IReadOnlyList<StoredFeatureSummary>> FindSummariesContainingAnyPoint(
         IEnumerable<Coordinate> points,
         int? adminLevel = null,

@@ -105,17 +105,28 @@ public sealed class AdminBoundaryMetricsEnricher(
         StoredFeature boundary,
         CancellationToken cancellationToken)
     {
-        var country = (await adminBoundaries.FindSummariesContainingAnyPoint(
-            [boundary.ResolvedCentroid], adminLevel: 2, cancellationToken: cancellationToken)).FirstOrDefault();
+        var centroid = boundary.ResolvedCentroid;
+        var candidates = await adminBoundaries.FindSummariesContainingAnyPoint(
+            [centroid], adminLevel: 2, cancellationToken: cancellationToken);
 
-        if (country != null)
+        if (candidates.Count > 0)
         {
-            metrics["countryId"] = country.Id;
-            if (country.Properties.TryGetValue("countryCode", out var code)
-                && code?.ToString() is string countryCode)
+            // The bbox prefilter returns a superset; only a boundary whose full geometry
+            // actually contains the centroid is a valid country match.
+            var docs = await adminBoundaries.GetByIds(candidates.Select(c => c.Id), cancellationToken);
+            var country = candidates.FirstOrDefault(candidate =>
+                docs.Any(doc => doc.Id == candidate.Id
+                    && RouteFeatureMatcher.IsPointInGeometry(centroid, doc.Geometry)));
+
+            if (country != null)
             {
-                metrics["countryCode"] = countryCode;
-                return;
+                metrics["countryId"] = country.Id;
+                if (country.Properties.TryGetValue("countryCode", out var code)
+                    && code?.ToString() is string countryCode)
+                {
+                    metrics["countryCode"] = countryCode;
+                    return;
+                }
             }
         }
 
