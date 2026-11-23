@@ -133,6 +133,8 @@ jobs:
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/stigar-${{ matrix.name }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/stigar-${{ matrix.name }}:latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
 
   # Starts after verify and runs alongside build. The 34 PostGIS tests share
   # one Testcontainers fixture and a serialized collection, so their ~20s is
