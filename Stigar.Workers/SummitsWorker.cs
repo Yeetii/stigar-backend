@@ -31,7 +31,11 @@ public class SummitsWorker(ILogger<SummitsWorker> _logger,
     public async Task ExecuteAsync(ActivityIdJob job, CancellationToken cancellationToken)
     {
         var activityId = job.ActivityId;
-        var activities = await _activityRepository.GetByIds([activityId], cancellationToken);
+        using var timings = new JobTimings(_logger, nameof(SummitsWorker), activityId);
+
+        var activities = await timings.MeasureAsync(
+            "db",
+            () => _activityRepository.GetByIds([activityId], cancellationToken));
         var activity = activities.FirstOrDefault();
         if (activity is null)
         {
@@ -41,24 +45,28 @@ public class SummitsWorker(ILogger<SummitsWorker> _logger,
             return;
         }
 
-        var peaks = (await FetchNearbyPeaks([activity], cancellationToken)).ToList();
-        await ProcessSummitJob(peaks, activity, job.Epoch, cancellationToken);
+        var peaks = (await FetchNearbyPeaks([activity], timings, cancellationToken)).ToList();
+        await ProcessSummitJob(peaks, activity, job.Epoch, timings, cancellationToken);
     }
 
-    private async Task ProcessSummitJob(List<Feature> peaks, Activity activity, long epoch, CancellationToken cancellationToken)
+    private async Task ProcessSummitJob(List<Feature> peaks, Activity activity, long epoch, JobTimings timings, CancellationToken cancellationToken)
     {
         if (activity.StartLatLng == null || activity.StartLatLng.Count < 2 || string.IsNullOrEmpty(activity.SummaryPolyline))
         {
             _logger.LogInformation("Skipping activity {ActivityId} since it has no geodata", activity.Id);
-            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken);
+            await timings.MeasureAsync("db", () =>
+                _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken));
             return;
         }
-        var summits = CalculateSummitedPeaks(activity, peaks).ToList();
+        var summits = timings.Measure("calculate", () => CalculateSummitedPeaks(activity, peaks).ToList());
         if (summits.Count == 0)
         {
             // No summits means this activity should have no rows in activity_summits.
-            await _activitySummitRepository.RemoveByActivity(activity.Id, cancellationToken);
-            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken);
+            await timings.MeasureAsync("db", async () =>
+            {
+                await _activitySummitRepository.RemoveByActivity(activity.Id, cancellationToken);
+                await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken);
+            });
             return;
         }
         _logger.LogInformation("Activity {ActivityId} has {SummitCount} summits", activity.Id, summits.Count);
@@ -74,9 +82,12 @@ public class SummitsWorker(ILogger<SummitsWorker> _logger,
         // Replace the activity's previous links so stale summits are removed. AddRange is
         // idempotent (ON CONFLICT DO NOTHING); the FK cascade removes rows when the
         // activity itself is deleted, so no manual domain-document cleanup is needed.
-        await _activitySummitRepository.RemoveByActivity(activity.Id, cancellationToken);
-        await _activitySummitRepository.AddRange(links, cancellationToken);
-        await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken);
+        await timings.MeasureAsync("db", async () =>
+        {
+            await _activitySummitRepository.RemoveByActivity(activity.Id, cancellationToken);
+            await _activitySummitRepository.AddRange(links, cancellationToken);
+            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.SummitedPeaks, epoch, cancellationToken);
+        });
     }
 
     private IEnumerable<Feature> CalculateSummitedPeaks(Activity activity, IEnumerable<Feature> nearbyPeaks)
@@ -97,28 +108,33 @@ public class SummitsWorker(ILogger<SummitsWorker> _logger,
     internal static string ToStoredPeakId(FeatureId peakId)
         => PeakIdRules.ToStoredPeakId(peakId);
 
-    private async Task<IEnumerable<Feature>> FetchNearbyPeaks(IEnumerable<Activity> activities, CancellationToken cancellationToken)
+    private async Task<IEnumerable<Feature>> FetchNearbyPeaks(IEnumerable<Activity> activities, JobTimings timings, CancellationToken cancellationToken)
     {
-        var decodedRoutes = activities
+        var decodedRoutes = timings.Measure("calculate", () => activities
             .Select(activity => activity.Polyline ?? activity.SummaryPolyline)
             .Where(polyline => !string.IsNullOrEmpty(polyline))
             .Select(polyline => GeoSpatialFunctions.DecodePolyline(polyline!)
                 .DistinctBy(point => (point.Lat, point.Lng))
                 .ToList())
-            .ToList();
+            .ToList());
 
         // Warm the PostGIS peaks table from Overpass before any spatial lookup so a freshly
         // migrated database does not silently yield zero candidates.
         var routePoints = decodedRoutes.SelectMany(points => points).ToList();
-        var ingestion = await _osmFeatureIngestion.EnsurePeaksAsync(routePoints, cancellationToken)
+        var ingestion = await timings.MeasureAsync(
+                "overpass",
+                () => _osmFeatureIngestion.EnsurePeaksAsync(routePoints, cancellationToken))
             ?? OsmIngestionResult.Empty;
         _logger.LogInformation(
-            "OSM peak ingestion for {RouteCount} routes: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}",
+            "OSM peak ingestion for {RouteCount} routes: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}, overpassMs={OverpassMs}, upsertMs={UpsertMs}, tileDbMs={TileDbMs}",
             decodedRoutes.Count,
             ingestion.TilesQueried,
             ingestion.FeaturesFetched,
             ingestion.FeaturesUpserted,
-            ingestion.TilesFailed);
+            ingestion.TilesFailed,
+            ingestion.OverpassFetchMs,
+            ingestion.UpsertMs,
+            ingestion.TileDbMs);
 
         var tileIndices = routePoints
             .Select(point => SlippyTileCalculator.WGS84ToTileIndex(point, 11))
@@ -128,7 +144,9 @@ public class SummitsWorker(ILogger<SummitsWorker> _logger,
         if (tileIndices.Count == 0)
             return [];
 
-        var peaks = await _peaksRepository.GetByTiles(tileIndices, cancellationToken);
+        var peaks = await timings.MeasureAsync(
+            "db",
+            () => _peaksRepository.GetByTiles(tileIndices, cancellationToken));
         _logger.LogInformation("Found {count} nearby peaks across {tileCount} tiles", peaks.Count, tileIndices.Count);
         return peaks.Select(x => x.ToFeature());
     }

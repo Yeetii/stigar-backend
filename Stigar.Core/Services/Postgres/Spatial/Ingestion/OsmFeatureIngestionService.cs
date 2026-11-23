@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using BAMCIS.GeoJSON;
 using Microsoft.Extensions.Logging;
@@ -97,6 +98,35 @@ public sealed class OsmFeatureIngestionService(
         var featuresFetched = 0;
         var featuresUpserted = 0;
         var tilesFailed = 0;
+        long overpassFetchMs = 0;
+        long upsertMs = 0;
+        long tileDbMs = 0;
+
+        static async Task<T> TimeResult<T>(Func<Task<T>> operation, Action<long> addMs)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                return await operation();
+            }
+            finally
+            {
+                addMs(stopwatch.ElapsedMilliseconds);
+            }
+        }
+
+        static async Task TimeVoid(Func<Task> operation, Action<long> addMs)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                await operation();
+            }
+            finally
+            {
+                addMs(stopwatch.ElapsedMilliseconds);
+            }
+        }
 
         foreach (var (x, y) in tiles)
         {
@@ -104,21 +134,28 @@ public sealed class OsmFeatureIngestionService(
 
             try
             {
-                if (await tileQueries.HasBeenQueried(kind, zoom, x, y, cancellationToken))
+                if (await TimeResult(
+                        () => tileQueries.HasBeenQueried(kind, zoom, x, y, cancellationToken),
+                        ms => tileDbMs += ms))
                     continue;
 
                 var (southWest, northEast) = SlippyTileCalculator.TileIndexToWGS84(x, y, zoom);
-                var rawFeatures = (await fetch(southWest, northEast, cancellationToken)).ToList();
+                var rawFeatures = (await TimeResult(
+                        () => fetch(southWest, northEast, cancellationToken),
+                        ms => overpassFetchMs += ms))
+                    .ToList();
                 featuresFetched += rawFeatures.Count;
 
                 var stored = rawFeatures.Select(toStored).ToList();
                 if (stored.Count > 0)
                 {
-                    await upsert(stored, cancellationToken);
+                    await TimeVoid(() => upsert(stored, cancellationToken), ms => upsertMs += ms);
                     featuresUpserted += stored.Count;
                 }
 
-                await tileQueries.MarkQueried(kind, zoom, x, y, cancellationToken);
+                await TimeVoid(
+                    () => tileQueries.MarkQueried(kind, zoom, x, y, cancellationToken),
+                    ms => tileDbMs += ms);
                 tilesQueried++;
 
                 logger.LogDebug(
@@ -147,6 +184,11 @@ public sealed class OsmFeatureIngestionService(
             }
         }
 
-        return new OsmIngestionResult(tilesQueried, featuresFetched, featuresUpserted, tilesFailed);
+        return new OsmIngestionResult(tilesQueried, featuresFetched, featuresUpserted, tilesFailed)
+        {
+            OverpassFetchMs = overpassFetchMs,
+            UpsertMs = upsertMs,
+            TileDbMs = tileDbMs
+        };
     }
 }

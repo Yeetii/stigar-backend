@@ -33,13 +33,17 @@ public class VisitedAreasWorker(
     public async Task ExecuteAsync(ActivityIdJob job, CancellationToken cancellationToken)
     {
         var activityId = job.ActivityId;
-        var activities = await _activityRepository.GetByIds([activityId], cancellationToken);
+        using var timings = new JobTimings(_logger, nameof(VisitedAreasWorker), activityId);
+
+        var activities = await timings.MeasureAsync(
+            "db",
+            () => _activityRepository.GetByIds([activityId], cancellationToken));
         var activitiesList = activities
             .Where(a => !string.IsNullOrWhiteSpace(GetRoutePolyline(a)))
             .ToList();
 
-        var nearbyAreas = (await FetchNearbyAreas(activitiesList, cancellationToken)).ToList();
-        await ProcessJob(activityId, activitiesList, nearbyAreas, job.Epoch, cancellationToken);
+        var nearbyAreas = (await FetchNearbyAreas(activitiesList, timings, cancellationToken)).ToList();
+        await ProcessJob(activityId, activitiesList, nearbyAreas, job.Epoch, timings, cancellationToken);
     }
 
     private async Task ProcessJob(
@@ -47,6 +51,7 @@ public class VisitedAreasWorker(
         List<Activity> activitiesList,
         List<StoredFeature> nearbyAreas,
         long epoch,
+        JobTimings timings,
         CancellationToken cancellationToken)
     {
         var activity = activitiesList.FirstOrDefault(a => a.Id == activityId);
@@ -58,24 +63,29 @@ public class VisitedAreasWorker(
             _logger.LogInformation("Skipping activity {ActivityId} since it has no geodata", activityId);
             if (activity != null)
             {
-                await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken);
+                await timings.MeasureAsync("db", () =>
+                    _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken));
             }
             return;
         }
 
-        var activityPoints = GeoSpatialFunctions.DecodePolyline(routePolyline).ToList();
+        var (activityPoints, boundaryLookupPoints) = timings.Measure("calculate", () =>
+        {
+            var points = GeoSpatialFunctions.DecodePolyline(routePolyline).ToList();
+            var lookupPolyline = GetBoundaryLookupPolyline(activity) ?? routePolyline;
+            var lookupPoints = string.Equals(lookupPolyline, routePolyline, StringComparison.Ordinal)
+                ? points
+                : GeoSpatialFunctions.DecodePolyline(lookupPolyline).ToList();
+            return (points, lookupPoints);
+        });
         _logger.LogDebug("Activity {ActivityId} decoded {PointCount} route points", activityId, activityPoints.Count);
-
-        var boundaryLookupPolyline = GetBoundaryLookupPolyline(activity) ?? routePolyline;
-        var boundaryLookupPoints = string.Equals(boundaryLookupPolyline, routePolyline, StringComparison.Ordinal)
-            ? activityPoints
-            : GeoSpatialFunctions.DecodePolyline(boundaryLookupPolyline).ToList();
         _logger.LogDebug(
             "Activity {ActivityId} using {LookupPointCount} points for admin boundary lookup",
             activityId,
             boundaryLookupPoints.Count);
 
-        var nearbyRegions = (await FetchAdminRegionsForActivity(boundaryLookupPoints, cancellationToken)).ToList();
+        var nearbyRegions = (await FetchAdminRegionsForActivity(boundaryLookupPoints, timings, cancellationToken))
+            .ToList();
 
         if (nearbyRegions.Count == 0)
         {
@@ -95,10 +105,10 @@ public class VisitedAreasWorker(
             }
         }
 
-        var visitedAreas = FindVisitedProtectedAreas(activityPoints, nearbyAreas)
+        var visitedAreas = timings.Measure("calculate", () => FindVisitedProtectedAreas(activityPoints, nearbyAreas)
             .Concat(FindVisitedRegionAreas(nearbyRegions))
             .Concat(FindVisitedCountriesFromRegions(nearbyRegions))
-            .ToList();
+            .ToList());
 
         var visitedCountryCount = visitedAreas.Count(a => string.Equals(a.AreaType, "country", StringComparison.Ordinal));
         _logger.LogInformation(
@@ -112,14 +122,17 @@ public class VisitedAreasWorker(
         if (visitedAreas.Count == 0)
         {
             // No visited areas means this activity should have no rows in activity_visited_areas.
-            await _visitedAreaRepository.RemoveByActivity(activity.Id, cancellationToken);
-            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken);
+            await timings.MeasureAsync("db", async () =>
+            {
+                await _visitedAreaRepository.RemoveByActivity(activity.Id, cancellationToken);
+                await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken);
+            });
             return;
         }
 
-        var links = visitedAreas
+        var links = timings.Measure("calculate", () => visitedAreas
             .Select(area => new VisitedAreaLink(activity.Id, activity.UserId, area.AreaId, DateTime.UtcNow))
-            .ToList();
+            .ToList());
 
         _logger.LogInformation(
             "Writing visited areas for activity {ActivityId}: links={LinkCount}, areaIds=[{AreaIds}]",
@@ -130,10 +143,13 @@ public class VisitedAreasWorker(
         // table holds only (activity, user, area); the area's descriptive properties come
         // from the protected_areas/admin_boundaries domain tables. FK cascade removes rows
         // when the activity itself is deleted.
-        await _visitedAreaRepository.RemoveByActivity(activity.Id, cancellationToken);
-        await _visitedAreaRepository.AddRange(links, cancellationToken);
+        await timings.MeasureAsync("db", async () =>
+        {
+            await _visitedAreaRepository.RemoveByActivity(activity.Id, cancellationToken);
+            await _visitedAreaRepository.AddRange(links, cancellationToken);
+            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken);
+        });
         _logger.LogInformation("Batch write complete for activity {ActivityId}", activityId);
-        await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedAreas, epoch, cancellationToken);
     }
 
     private static IEnumerable<VisitedAreaCandidate> FindVisitedProtectedAreas(
@@ -284,68 +300,88 @@ public class VisitedAreasWorker(
 
     private async Task<IEnumerable<StoredFeature>> FetchNearbyAreas(
         IEnumerable<Activity> activities,
+        JobTimings timings,
         CancellationToken cancellationToken)
     {
         // PostGIS performs the containment test (ST_Intersects) that the old worker ran
         // locally over tile-fetched documents. Query with the same decoded route points
         // so the candidate set matches the final FindVisitedProtectedAreas result.
-        var decodedRoutes = activities
+        var decodedRoutes = timings.Measure("calculate", () => activities
             .Select(activity => activity.SummaryPolyline ?? activity.Polyline)
             .Where(polyline => !string.IsNullOrEmpty(polyline))
             .Select(polyline => GeoSpatialFunctions.DecodePolyline(polyline!)
                 .DistinctBy(point => (point.Lat, point.Lng))
                 .ToList())
-            .ToList();
+            .ToList());
 
         var routePoints = decodedRoutes.SelectMany(points => points).ToList();
-        var ingestion = await _osmFeatureIngestion.EnsureProtectedAreasAsync(routePoints, cancellationToken)
+        var ingestion = await timings.MeasureAsync(
+                "overpass",
+                () => _osmFeatureIngestion.EnsureProtectedAreasAsync(routePoints, cancellationToken))
             ?? OsmIngestionResult.Empty;
         _logger.LogInformation(
-            "OSM protected-area ingestion for {RouteCount} routes: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}",
+            "OSM protected-area ingestion for {RouteCount} routes: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}, overpassMs={OverpassMs}, upsertMs={UpsertMs}, tileDbMs={TileDbMs}",
             decodedRoutes.Count,
             ingestion.TilesQueried,
             ingestion.FeaturesFetched,
             ingestion.FeaturesUpserted,
-            ingestion.TilesFailed);
+            ingestion.TilesFailed,
+            ingestion.OverpassFetchMs,
+            ingestion.UpsertMs,
+            ingestion.TileDbMs);
 
-        var areasById = new Dictionary<string, StoredFeature>(StringComparer.Ordinal);
-        foreach (var points in decodedRoutes)
+        var areasById = await timings.MeasureAsync("db", async () =>
         {
-            foreach (var point in points)
+            var result = new Dictionary<string, StoredFeature>(StringComparer.Ordinal);
+            foreach (var points in decodedRoutes)
             {
-                var containing = await _protectedAreasRepository.FindContainingPoint(point, cancellationToken);
-                foreach (var area in containing)
-                    areasById[area.Id] = area;
+                foreach (var point in points)
+                {
+                    var containing = await _protectedAreasRepository.FindContainingPoint(point, cancellationToken);
+                    foreach (var area in containing)
+                        result[area.Id] = area;
+                }
             }
-        }
+            return result;
+        });
         _logger.LogDebug("Found {Count} nearby protected areas", areasById.Count);
         return areasById.Values;
     }
 
     private async Task<IEnumerable<StoredFeatureSummary>> FetchAdminRegionsForActivity(
         List<Coordinate> activityPoints,
+        JobTimings timings,
         CancellationToken cancellationToken)
     {
         if (activityPoints.Count == 0)
             return [];
 
-        var coordinates = SampleCoordinatesForAdminBoundaryLookup(activityPoints)
+        var coordinates = timings.Measure("calculate", () => SampleCoordinatesForAdminBoundaryLookup(activityPoints)
             .DistinctBy(p => (p.Lat, p.Lng))
-            .ToList();
+            .ToList());
 
         // Ensure the admin regions used by this worker are stored before the containment query.
-        var ingestion = await _osmFeatureIngestion.EnsureAdminBoundariesAsync(
-            coordinates, AdminLevelRegion, cancellationToken) ?? OsmIngestionResult.Empty;
+        var ingestion = await timings.MeasureAsync(
+                "overpass",
+                () => _osmFeatureIngestion.EnsureAdminBoundariesAsync(
+                    coordinates, AdminLevelRegion, cancellationToken))
+            ?? OsmIngestionResult.Empty;
         _logger.LogInformation(
-            "OSM admin boundary ingestion for adminLevel={AdminLevel}: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}",
+            "OSM admin boundary ingestion for adminLevel={AdminLevel}: tilesQueried={TilesQueried}, fetched={Fetched}, upserted={Upserted}, failed={Failed}, overpassMs={OverpassMs}, upsertMs={UpsertMs}, tileDbMs={TileDbMs}",
             AdminLevelRegion,
             ingestion.TilesQueried,
             ingestion.FeaturesFetched,
             ingestion.FeaturesUpserted,
-            ingestion.TilesFailed);
+            ingestion.TilesFailed,
+            ingestion.OverpassFetchMs,
+            ingestion.UpsertMs,
+            ingestion.TileDbMs);
 
-        var summaries = (await _adminBoundariesRepository.FindSummariesContainingAnyPoint(
-            coordinates, AdminLevelRegion, cancellationToken)).ToList();
+        var summaries = (await timings.MeasureAsync(
+                "db",
+                () => _adminBoundariesRepository.FindSummariesContainingAnyPoint(
+                    coordinates, AdminLevelRegion, cancellationToken)))
+            .ToList();
 
         if (summaries.Count == 0)
         {
@@ -359,15 +395,17 @@ public class VisitedAreasWorker(
             return summaries;
         }
 
-        var boundaryDocsById = (await _adminBoundariesRepository.GetByIds(
-                summaries.Select(summary => summary.Id),
-                cancellationToken))
+        var boundaryDocsById = (await timings.MeasureAsync(
+                "db",
+                () => _adminBoundariesRepository.GetByIds(
+                    summaries.Select(summary => summary.Id),
+                    cancellationToken)))
             .ToDictionary(doc => doc.Id, StringComparer.Ordinal);
 
-        var validatedSummaries = ValidateAdminRegionCandidates(
+        var validatedSummaries = timings.Measure("calculate", () => ValidateAdminRegionCandidates(
             summaries,
             boundaryDocsById,
-            activityPoints);
+            activityPoints));
 
         if (validatedSummaries.Count == 0)
         {

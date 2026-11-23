@@ -38,21 +38,28 @@ public class VisitedPathsWorker(
     public async Task ExecuteAsync(ActivityIdJob job, CancellationToken cancellationToken)
     {
         var activityId = job.ActivityId;
-        var activities = await FetchActivitySlims([activityId], cancellationToken);
+        using var timings = new JobTimings(_logger, nameof(VisitedPathsWorker), activityId);
+
+        var activities = await timings.MeasureAsync(
+            "db",
+            () => FetchActivitySlims([activityId], cancellationToken));
         var activitiesList = activities
             .Where(a => !string.IsNullOrWhiteSpace(a.Polyline ?? a.SummaryPolyline))
             .ToList();
         var activitiesById = activitiesList.ToDictionary(a => a.Id);
 
         // Decode polylines once and reuse
-        var decodedActivities = activitiesList.ToDictionary(
+        var decodedActivities = timings.Measure("calculate", () => activitiesList.ToDictionary(
             a => a.Id,
-            a => GeoSpatialFunctions.DecodePolyline(a.Polyline ?? a.SummaryPolyline).ToList());
+            a => GeoSpatialFunctions.DecodePolyline(a.Polyline ?? a.SummaryPolyline).ToList()));
 
-        var nearbyPaths = (await FetchNearbyPaths(decodedActivities)).ToList();
-        var pathGridIndex = BuildPathGridIndex(nearbyPaths);
+        var nearbyPaths = (await timings.MeasureAsync(
+                "shards",
+                () => FetchNearbyPaths(decodedActivities)))
+            .ToList();
+        var pathGridIndex = timings.Measure("calculate", () => BuildPathGridIndex(nearbyPaths));
 
-        await ProcessJob(activityId, activitiesById, decodedActivities, pathGridIndex, job.Epoch, cancellationToken);
+        await ProcessJob(activityId, activitiesById, decodedActivities, pathGridIndex, job.Epoch, timings, cancellationToken);
     }
 
     private async Task ProcessJob(
@@ -61,6 +68,7 @@ public class VisitedPathsWorker(
         Dictionary<string, List<Coordinate>> decodedActivities,
         PathGridIndex pathGridIndex,
         long epoch,
+        JobTimings timings,
         CancellationToken cancellationToken)
     {
         activitiesById.TryGetValue(activityId, out var activity);
@@ -70,19 +78,24 @@ public class VisitedPathsWorker(
             _logger.LogInformation("Skipping activity {ActivityId} since it has no geodata", activityId);
             if (activity != null)
             {
-                await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken);
+                await timings.MeasureAsync("db", () =>
+                    _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken));
             }
             return;
         }
 
-        var activityGrid = BuildSpatialGrid(activityPoints);
-        var visitedPaths = FindVisitedPaths(activityGrid, pathGridIndex).ToList();
-        var visitedPathsByOsmId = visitedPaths
-            .Select(path => (Path: path, OsmHighwayId: GetOsmHighwayId(path)))
-            .Where(match => !string.IsNullOrWhiteSpace(match.OsmHighwayId))
-            .GroupBy(match => match.OsmHighwayId!, StringComparer.Ordinal)
-            .Select(group => (group.First().Path, OsmHighwayId: group.Key))
-            .ToList();
+        var (visitedPaths, visitedPathsByOsmId) = timings.Measure("calculate", () =>
+        {
+            var activityGrid = BuildSpatialGrid(activityPoints);
+            var visited = FindVisitedPaths(activityGrid, pathGridIndex).ToList();
+            var byOsmId = visited
+                .Select(path => (Path: path, OsmHighwayId: GetOsmHighwayId(path)))
+                .Where(match => !string.IsNullOrWhiteSpace(match.OsmHighwayId))
+                .GroupBy(match => match.OsmHighwayId!, StringComparer.Ordinal)
+                .Select(group => (group.First().Path, OsmHighwayId: group.Key))
+                .ToList();
+            return (visited, byOsmId);
+        });
 
         _logger.LogInformation(
             "Activity {ActivityId} visits {PathCount} paths ({OsmPathCount} by canonical osmId)",
@@ -93,12 +106,15 @@ public class VisitedPathsWorker(
         if (visitedPathsByOsmId.Count == 0)
         {
             // The junction table is the sole record of which paths an activity visited.
-            await _visitedPathRepository.RemoveByActivity(activity.Id, cancellationToken);
-            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken);
+            await timings.MeasureAsync("db", async () =>
+            {
+                await _visitedPathRepository.RemoveByActivity(activity.Id, cancellationToken);
+                await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken);
+            });
             return;
         }
 
-        var paths = visitedPathsByOsmId
+        var paths = timings.Measure("calculate", () => visitedPathsByOsmId
             .Select(pathMatch =>
             {
                 var pathFeature = pathMatch.Path;
@@ -112,14 +128,17 @@ public class VisitedPathsWorker(
                     featureTileX,
                     featureTileY);
             })
-            .ToList();
+            .ToList());
 
         // Replace the activity's previous links, then insert the current ones. AddPath
         // carries the name/type/tile columns; the writes are idempotent, and the FK
         // cascade removes rows when the activity itself is deleted.
-        await _visitedPathRepository.RemoveByActivity(activity.Id, cancellationToken);
-        await _visitedPathRepository.AddRange(paths, cancellationToken);
-        await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken);
+        await timings.MeasureAsync("db", async () =>
+        {
+            await _visitedPathRepository.RemoveByActivity(activity.Id, cancellationToken);
+            await _visitedPathRepository.AddRange(paths, cancellationToken);
+            await _userSyncStatusService.TryMarkActivityStageProcessed(activity.UserId, activity.Id, ActivitySyncStage.VisitedPaths, epoch, cancellationToken);
+        });
     }
 
     internal static HashSet<(int, int)> BuildSpatialGrid(List<Coordinate> points)

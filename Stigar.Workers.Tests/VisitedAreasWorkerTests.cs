@@ -129,8 +129,9 @@ public class VisitedAreasWorkerTests
         var users = new Mock<IUserRepository>();
         var syncStatus = new UserSyncStatusService(users.Object, activities.Object);
 
+        var logger = new CapturingLogger<VisitedAreasWorker>();
         var worker = new VisitedAreasWorker(
-            NullLogger<VisitedAreasWorker>.Instance,
+            logger,
             activities.Object,
             visitedAreas.Object,
             protectedAreas.Object,
@@ -139,6 +140,12 @@ public class VisitedAreasWorkerTests
             CreateIngestionMock().Object);
 
         await worker.ExecuteAsync(new ActivityIdJob { ActivityId = activityId }, CancellationToken.None);
+
+        var timing = Assert.Single(logger.Entries, entry =>
+            entry.Message.Contains($"VisitedAreasWorker timing for activity {activityId}", StringComparison.Ordinal));
+        Assert.Contains("overpass=", timing.Message, StringComparison.Ordinal);
+        Assert.Contains("db=", timing.Message, StringComparison.Ordinal);
+        Assert.Contains("calculate=", timing.Message, StringComparison.Ordinal);
 
         protectedAreas.Verify(
             r => r.FindContainingPoint(It.IsAny<Coordinate>(), It.IsAny<CancellationToken>()),

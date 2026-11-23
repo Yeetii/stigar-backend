@@ -33,4 +33,13 @@ public sealed record OsmIngestionResult(
     public static OsmIngestionResult Empty { get; } = new(0, 0, 0, 0);
 
     public bool AnyWorkDone => TilesQueried > 0 || TilesFailed > 0;
+
+    /// <summary>Milliseconds spent in Overpass HTTP calls.</summary>
+    public long OverpassFetchMs { get; init; }
+
+    /// <summary>Milliseconds spent upserting fetched features into PostGIS.</summary>
+    public long UpsertMs { get; init; }
+
+    /// <summary>Milliseconds spent in the tile-query bookkeeping reads/writes.</summary>
+    public long TileDbMs { get; init; }
 }
