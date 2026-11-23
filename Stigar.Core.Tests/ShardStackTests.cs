@@ -318,7 +318,7 @@ public class ShardStackTests
     {
         var indexPath = HighwayZoomIndexService.GetIndexPath(7, 68, 38);
         var index = new HighwayTileShardIndex(
-            Version: 4,
+            Version: 5,
             Zoom: 7,
             X: 68,
             Y: 38,
@@ -356,7 +356,7 @@ public class ShardStackTests
             var indexStore = new FileSystemShardIndexStore(root);
             var indexPath = HighwayZoomIndexService.GetIndexPath(7, 68, 41);
             await indexStore.WriteAsync(indexPath, JsonSerializer.SerializeToUtf8Bytes(
-                new HighwayTileShardIndex(4, 7, 68, 41, false, [new HighwayTileShardRef(2200, 1320)]),
+                new HighwayTileShardIndex(5, 7, 68, 41, false, [new HighwayTileShardRef(2200, 1320)]),
                 JsonOptions), CancellationToken.None);
 
             HighwayZoomIndexService? indexService = null;

@@ -95,6 +95,23 @@ public static class HighwayZoomRules
         "difficult_alpine_hiking",
     };
 
+    private const string InformalTagValue = "informal";
+
+    private static readonly HashSet<string> SnowmobileAccessValues = new(StringComparer.Ordinal)
+    {
+        "yes",
+        "designated",
+        "permissive",
+        "official",
+    };
+
+    private static readonly HashSet<string> TruthyValues = new(StringComparer.Ordinal)
+    {
+        "yes",
+        "true",
+        "1",
+    };
+
     private static readonly uint HighwayTagKeyId = ShardEncodingIds.TagIdFromString("highway");
     private static readonly uint FootwayTagKeyId = ShardEncodingIds.TagIdFromString("footway");
     private static readonly uint SnowmobileTagKeyId = ShardEncodingIds.TagIdFromString("snowmobile");
@@ -208,7 +225,7 @@ public static class HighwayZoomRules
     }
 
     private static bool HasSnowmobileAccess(string? snowmobile)
-        => snowmobile is "yes" or "designated" or "permissive" or "official";
+        => snowmobile is not null && SnowmobileAccessValues.Contains(snowmobile);
 
     private static bool IsVisibleAtZoom(string value, string? footway, string? informal, string? trailVisibility, string? sacScale, int zoom, HighwayTileZoomProfile profile)
     {
@@ -258,7 +275,7 @@ public static class HighwayZoomRules
         => TrailBackbone.Contains(value)
             || Cycleways.Contains(value)
             || LocalPathways.Contains(value)
-            || string.Equals(value, "informal", StringComparison.Ordinal);
+            || string.Equals(value, InformalTagValue, StringComparison.Ordinal);
 
     private static (string? highway, string? footway, string? snowmobile, string? informal, string? trailVisibility, string? sacScale) GetRoadClassifications(IDictionary<string, dynamic> properties)
     {
@@ -272,11 +289,11 @@ public static class HighwayZoomRules
     }
 
     private static bool IsTruthy(string? value)
-        => value is "yes" or "true" or "1";
+        => value is not null && TruthyValues.Contains(value);
 
     private static bool IsInformalValue(string value, string? footway, string? informal)
-        => string.Equals(value, "informal", StringComparison.Ordinal)
-            || string.Equals(footway, "informal", StringComparison.Ordinal)
+        => string.Equals(value, InformalTagValue, StringComparison.Ordinal)
+            || string.Equals(footway, InformalTagValue, StringComparison.Ordinal)
             || IsTruthy(informal);
 
     private static string? TryReadProperty(IDictionary<string, dynamic> properties, string key)
@@ -299,6 +316,7 @@ public static class HighwayZoomRules
         var values = MajorRoads
             .Concat(ArterialRoads)
             .Concat(LocalRoads)
+            .Concat(TrailBackbone)
             .Concat(Cycleways)
             .Concat(LocalPathways)
             .Concat(LowVisibilityTrailValues)
@@ -306,6 +324,9 @@ public static class HighwayZoomRules
             .Concat(LowDifficultySacScales)
             .Concat(MediumDifficultySacScales)
             .Concat(HighDifficultySacScales)
+            .Concat(SnowmobileAccessValues)
+            .Concat(TruthyValues)
+            .Append(InformalTagValue)
             .Distinct(StringComparer.Ordinal);
 
         return values
