@@ -1,4 +1,6 @@
 using BAMCIS.GeoJSON;
+using Npgsql;
+using NpgsqlTypes;
 using Stigar.Core.Models;
 using Stigar.Core.Services.Postgres.Spatial;
 using Xunit;
@@ -70,6 +72,37 @@ public sealed class ProtectedAreaRepositoryTests(PostgisFixture fixture)
         Assert.NotNull(summary.Centroid);
         Assert.Equal(8.5, summary.Centroid!.Lng, 1);
         Assert.Equal(47.0, summary.Centroid.Lat, 1);
+    }
+
+    [SkippableFact]
+    public async Task FindSummariesContainingAnyPoint_UsesSpatialIndexForManyPoints()
+    {
+        await fixture.ResetAsync();
+        await InsertAreaAsync("area:1", "Alps Park", "park", null, null, "{}");
+
+        // A long route produces thousands of points; the query must drive the GiST index
+        // instead of evaluating every area against every point.
+        var lngs = Enumerable.Range(0, 500).Select(i => 8.4 + (i % 20) * 0.01).ToArray();
+        var lats = Enumerable.Range(0, 500).Select(i => 46.9 + (i % 25) * 0.008).ToArray();
+
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var disableSeqScan = new NpgsqlCommand("SET LOCAL enable_seqscan = off", connection, transaction))
+            await disableSeqScan.ExecuteNonQueryAsync();
+
+        await using var explain = new NpgsqlCommand(
+            "EXPLAIN " + ProtectedAreaRepository.ContainingAnySummarySql, connection, transaction);
+        explain.Parameters.Add(new NpgsqlParameter("lngs", NpgsqlDbType.Array | NpgsqlDbType.Double) { Value = lngs });
+        explain.Parameters.Add(new NpgsqlParameter("lats", NpgsqlDbType.Array | NpgsqlDbType.Double) { Value = lats });
+        var plan = new List<string>();
+        await using (var reader = await explain.ExecuteReaderAsync())
+            while (await reader.ReadAsync())
+                plan.Add(reader.GetString(0));
+        await transaction.CommitAsync();
+
+        Assert.True(
+            plan.Any(line => line.Contains("idx_protected_areas_geom", StringComparison.Ordinal)),
+            string.Join("\n", plan));
     }
 
     private Task InsertAreaAsync(

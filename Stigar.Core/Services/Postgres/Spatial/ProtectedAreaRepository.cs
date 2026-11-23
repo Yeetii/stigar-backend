@@ -38,13 +38,18 @@ public sealed class ProtectedAreaRepository(NpgsqlDataSource dataSource) : IProt
     private const string ContainingPredicate =
         " WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(@lng, @lat), 4326))";
 
-    private const string ContainingAnySummarySql = """
-        SELECT DISTINCT id, properties,
-               ST_X(ST_Centroid(geom)) AS cx, ST_Y(ST_Centroid(geom)) AS cy
-        FROM protected_areas
-        WHERE EXISTS (
-            SELECT 1 FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
-            WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326)))
+    // Drive from the point list into a LATERAL index lookup per point. An EXISTS over unnest
+    // instead scans the whole table and tests every point against every area (rows x points),
+    // which blows past the command timeout for long routes even though the GiST index exists.
+    internal const string ContainingAnySummarySql = """
+        SELECT DISTINCT area.id, area.properties,
+               ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
+        FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+        CROSS JOIN LATERAL (
+            SELECT id, properties, geom
+            FROM protected_areas
+            WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+        ) AS area
         """;
 
     public async Task<StoredFeature?> GetById(string id, CancellationToken cancellationToken = default)

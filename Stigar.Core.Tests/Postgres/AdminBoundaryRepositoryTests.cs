@@ -1,4 +1,7 @@
+using System.Globalization;
 using BAMCIS.GeoJSON;
+using Npgsql;
+using NpgsqlTypes;
 using Stigar.Core.Models;
 using Stigar.Core.Services;
 using Stigar.Core.Services.Postgres.Spatial;
@@ -83,6 +86,50 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
     }
 
     [SkippableFact]
+    public async Task FindSummariesContainingAnyPoint_UsesSpatialIndexForManyPoints()
+    {
+        await fixture.ResetAsync();
+
+        var lngs = Enumerable.Range(0, 120).Select(i => 7.9 + (i % 10) * 0.01).ToArray();
+        var lats = Enumerable.Range(0, 120).Select(i => 46.8 + (i % 12) * 0.01).ToArray();
+
+        // Realistic level-4 volume: enough rows that scanning all of them for every point
+        // is far more expensive than a GiST lookup per point.
+        for (var i = 0; i < 300; i++)
+        {
+            var lng = 7.0 + (i % 30) * 0.05;
+            var lat = 46.0 + (i / 30) * 0.05;
+            var x = lng.ToString(CultureInfo.InvariantCulture);
+            var y = lat.ToString(CultureInfo.InvariantCulture);
+            var x2 = (lng + 0.01).ToString(CultureInfo.InvariantCulture);
+            var y2 = (lat + 0.01).ToString(CultureInfo.InvariantCulture);
+            var geom = $$"""{"type":"Polygon","coordinates":[[[{{x}},{{y}}],[{{x2}},{{y}}],[{{x2}},{{y2}}],[{{x}},{{y2}}],[{{x}},{{y}}]]]}""";
+            await InsertBoundaryAsync($"admin:{i}", i + 1, "relation", 4, "Canton", null, 0, geom);
+        }
+        await fixture.ExecuteAsync("ANALYZE admin_boundaries");
+
+        await using var connection = await fixture.DataSource.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var disableSeqScan = new NpgsqlCommand("SET LOCAL enable_seqscan = off", connection, transaction))
+            await disableSeqScan.ExecuteNonQueryAsync();
+
+        await using var explain = new NpgsqlCommand(
+            "EXPLAIN " + AdminBoundaryRepository.ContainingAnySummarySql, connection, transaction);
+        explain.Parameters.Add(new NpgsqlParameter("lngs", NpgsqlDbType.Array | NpgsqlDbType.Double) { Value = lngs });
+        explain.Parameters.Add(new NpgsqlParameter("lats", NpgsqlDbType.Array | NpgsqlDbType.Double) { Value = lats });
+        explain.Parameters.AddWithValue("admin_level", 4);
+        var plan = new List<string>();
+        await using (var reader = await explain.ExecuteReaderAsync())
+            while (await reader.ReadAsync())
+                plan.Add(reader.GetString(0));
+        await transaction.CommitAsync();
+
+        Assert.True(
+            plan.Any(line => line.Contains("idx_admin_boundaries_geom", StringComparison.Ordinal)),
+            string.Join("\n", plan));
+    }
+
+    [SkippableFact]
     public async Task BulkUpsert_StoresPropertiesAsJsonb()
     {
         await fixture.ResetAsync();
@@ -118,7 +165,8 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
         int adminLevel,
         string name,
         string? wikidata,
-        int metricsVersion)
+        int metricsVersion,
+        string? geom = null)
         => fixture.ExecuteAsync(
             """
             INSERT INTO admin_boundaries
@@ -129,5 +177,5 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
             """,
             ("id", id), ("osm_id", osmId), ("osm_type", osmType),
             ("admin_level", adminLevel), ("name", name), ("wikidata", wikidata),
-            ("geom", Polygon), ("metrics_version", metricsVersion));
+            ("geom", geom ?? Polygon), ("metrics_version", metricsVersion));
 }

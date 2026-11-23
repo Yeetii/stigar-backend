@@ -44,14 +44,18 @@ public sealed class AdminBoundaryRepository(NpgsqlDataSource dataSource) : IAdmi
             metrics_version = EXCLUDED.metrics_version
         """;
 
-    private const string ContainingAnySummarySql = """
-        SELECT DISTINCT ab.id, ab.properties,
-               ST_X(ST_Centroid(ab.geom)) AS cx, ST_Y(ST_Centroid(ab.geom)) AS cy
-        FROM admin_boundaries ab
-        WHERE (@admin_level IS NULL OR ab.admin_level = @admin_level)
-          AND EXISTS (
-              SELECT 1 FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
-              WHERE ST_Intersects(ab.geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326)))
+    // Drive from the point list into a LATERAL index lookup per point. An EXISTS over unnest
+    // scans every boundary in the level and tests it against every point (rows x points).
+    internal const string ContainingAnySummarySql = """
+        SELECT DISTINCT area.id, area.properties,
+               ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
+        FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+        CROSS JOIN LATERAL (
+            SELECT id, properties, geom
+            FROM admin_boundaries ab
+            WHERE (@admin_level IS NULL OR ab.admin_level = @admin_level)
+              AND ST_Intersects(ab.geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+        ) AS area
         """;
 
     public async Task<StoredFeature?> GetById(string id, CancellationToken cancellationToken = default)
