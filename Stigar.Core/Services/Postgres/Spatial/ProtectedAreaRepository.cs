@@ -38,21 +38,28 @@ public sealed class ProtectedAreaRepository(NpgsqlDataSource dataSource) : IProt
     private const string ContainingPredicate =
         " WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(@lng, @lat), 4326))";
 
-    // Drive from the point list into a LATERAL index lookup per point, then collapse to one row
-    // per area before computing its centroid. An EXISTS over unnest instead scans the whole table
-    // and tests every point against every area (rows x points), which blows past the command
-    // timeout for long routes; recomputing the centroid per match is the other major cost.
+    // One indexed bbox probe over the whole route envelope instead of one ST_Intersects per point.
+    // Large protected-area geometries made each per-point probe cost tens of milliseconds, so a
+    // few hundred points added up to tens of seconds. This returns a SUPERSET of the areas that
+    // actually contain a route point; callers must apply RouteFeatureMatcher.IsPointInGeometry to
+    // the full geometry before treating a candidate as visited. The bbox centre is used as a cheap
+    // representative point for the summary (PostGIS caches geometry bounds, so ST_XMin/ST_XMax are
+    // effectively free) — ST_Centroid over a complex multipolygon was another large cost.
     internal const string ContainingAnySummarySql = """
         SELECT area.id, area.properties,
-               ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
+               (ST_XMin(area.geom) + ST_XMax(area.geom)) / 2 AS cx,
+               (ST_YMin(area.geom) + ST_YMax(area.geom)) / 2 AS cy
         FROM (
-            SELECT DISTINCT ON (match.id) match.id, match.properties, match.geom
-            FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            SELECT DISTINCT ON (ab.id) ab.id, ab.properties, ab.geom
+            FROM (
+                SELECT ST_SetSRID(ST_Envelope(ST_Collect(ST_MakePoint(q.lng, q.lat))), 4326) AS geom
+                FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            ) AS route
             CROSS JOIN LATERAL (
                 SELECT id, properties, geom
-                FROM protected_areas
-                WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
-            ) AS match
+                FROM protected_areas ab
+                WHERE ab.geom && route.geom
+            ) AS ab
         ) AS area
         """;
 

@@ -108,13 +108,34 @@ public sealed class ProtectedAreaRepositoryTests(PostgisFixture fixture)
             "ST_Centroid must run once per area after deduplication, not once per point/area match: " + string.Join("\n", plan));
     }
 
+    [SkippableFact]
+    public async Task FindSummariesContainingAnyPoint_ReturnsBboxCandidatesNotExactContainment()
+    {
+        await fixture.ResetAsync();
+        // Two points far apart: the envelope spans the whole 8..9 longitude range.
+        // "between" sits inside that envelope but contains neither point; it must still be
+        // returned as a candidate so the caller's local geometry check can reject it.
+        await InsertAreaAsync("area:hit", "Hit", "park", null, null, "{}",
+            """{"type":"Polygon","coordinates":[[[7.98,46.98],[8.02,46.98],[8.02,47.02],[7.98,47.02],[7.98,46.98]]]}""");
+        await InsertAreaAsync("area:between", "Between", "park", null, null, "{}",
+            """{"type":"Polygon","coordinates":[[[8.48,46.98],[8.52,46.98],[8.52,47.02],[8.48,47.02],[8.48,46.98]]]}""");
+        await InsertAreaAsync("area:far", "Far", "park", null, null, "{}",
+            """{"type":"Polygon","coordinates":[[[9.98,48.98],[10.02,48.98],[10.02,49.02],[9.98,49.02],[9.98,48.98]]]}""");
+
+        var summaries = await new ProtectedAreaRepository(fixture.DataSource)
+            .FindSummariesContainingAnyPoint([new Coordinate(8.0, 47.0), new Coordinate(9.0, 47.0)]);
+
+        Assert.Equal(["area:between", "area:hit"], summaries.Select(s => s.Id).OrderBy(id => id));
+    }
+
     private Task InsertAreaAsync(
         string id,
         string name,
         string areaType,
         string? wikidata,
         string? commons,
-        string properties)
+        string properties,
+        string? geom = null)
         => fixture.ExecuteAsync(
             """
             INSERT INTO protected_areas
@@ -125,5 +146,5 @@ public sealed class ProtectedAreaRepositoryTests(PostgisFixture fixture)
             """,
             ("id", id), ("name", name), ("area_type", areaType),
             ("wikidata", wikidata), ("commons", commons),
-            ("geom", Polygon), ("properties", properties));
+            ("geom", geom ?? Polygon), ("properties", properties));
 }

@@ -14,7 +14,11 @@ public interface IProtectedAreaRepository
     /// <summary>Areas whose geometry intersects the supplied point (ST_Intersects).</summary>
     Task<IReadOnlyList<StoredFeature>> FindContainingPoint(Coordinate point, CancellationToken cancellationToken = default);
 
-    /// <summary>Lightweight summaries of areas containing any of the supplied points.</summary>
+    /// <summary>
+    /// Lightweight summaries of candidate areas whose bounds overlap the supplied points' envelope.
+    /// This is a superset: callers must check the full geometry with
+    /// RouteFeatureMatcher.IsPointInGeometry before treating a candidate as actually visited.
+    /// </summary>
     Task<IReadOnlyList<StoredFeatureSummary>> FindSummariesContainingAnyPoint(
         IEnumerable<Coordinate> points,
         CancellationToken cancellationToken = default);
