@@ -12,7 +12,9 @@ public class HighwayZoomIndexService(
     int canonicalZoom = 12,
     HighwayTileZoomProfile? profile = null)
 {
-    private const int IndexVersion = 4;
+    // Bumped from 4: earlier indexes were built with an incomplete ShardFeature tag-value
+    // lookup that dropped path/track, snowmobile and informal features from low-zoom shards.
+    private const int IndexVersion = 5;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly IShardIndexStore _indexStore = indexStore;
     private readonly IShardRepository _shardRepository = shardRepository;

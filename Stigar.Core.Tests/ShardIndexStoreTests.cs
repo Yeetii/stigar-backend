@@ -74,7 +74,7 @@ public sealed class ShardIndexStoreTests : IDisposable
     }
 
     [Fact]
-    public async Task HighwayZoomIndexService_RebuildIndexAsync_PersistsVersion4IndexThroughStore()
+    public async Task HighwayZoomIndexService_RebuildIndexAsync_PersistsCurrentVersionIndexThroughStore()
     {
         var store = new InMemoryShardIndexStore();
         var shard = CreateShardWithMajorRoad();
@@ -90,10 +90,75 @@ public sealed class ShardIndexStoreTests : IDisposable
         Assert.True(store.Entries.ContainsKey(path));
         var index = JsonSerializer.Deserialize<HighwayTileShardIndex>(store.Entries[path], JsonOptions);
         Assert.NotNull(index);
-        Assert.Equal(4, index.Version);
+        Assert.Equal(5, index.Version);
         Assert.Equal(7, index.Zoom);
         Assert.NotEmpty(index.Shards);
         Assert.Equal(index.Shards.Count, selection.Shards.Count);
+    }
+
+    [Fact]
+    public async Task HighwayZoomIndexService_BuildAndRebuild_RetainsTrailBackboneOnlyShard()
+    {
+        var store = new InMemoryShardIndexStore();
+        var shard = CreateShardWithTaggedFeature(
+            ("highway", "path"),
+            ("trail_visibility", "good"));
+        var repository = new FakeShardRepository(shard);
+        var service = new HighwayZoomIndexService(
+            store,
+            repository,
+            NullLogger<HighwayZoomIndexService>.Instance,
+            canonicalZoom: Zoom);
+
+        var selection = await service.RebuildIndexAsync(7, 68, 38, CancellationToken.None);
+
+        Assert.True(selection.IsComplete);
+        Assert.Contains(selection.Shards, key => key.x == 2176 && key.y == 1216);
+    }
+
+    [Fact]
+    public async Task HighwayZoomIndexService_GetShardKeysAsync_RebuildsStaleVersionIndex()
+    {
+        var store = new InMemoryShardIndexStore();
+        var path = HighwayZoomIndexService.GetIndexPath(7, 68, 38);
+        var staleIndex = new HighwayTileShardIndex(4, 7, 68, 38, true, []);
+        store.Entries[path] = JsonSerializer.SerializeToUtf8Bytes(staleIndex, JsonOptions);
+        var shard = CreateShardWithTaggedFeature(("highway", "path"));
+        var service = new HighwayZoomIndexService(
+            store,
+            new FakeShardRepository(shard),
+            NullLogger<HighwayZoomIndexService>.Instance,
+            canonicalZoom: Zoom);
+
+        var selection = await service.GetShardKeysAsync(7, 68, 38, CancellationToken.None);
+
+        Assert.Contains(selection.Shards, key => key.x == 2176 && key.y == 1216);
+        var rebuilt = JsonSerializer.Deserialize<HighwayTileShardIndex>(store.Entries[path], JsonOptions);
+        Assert.NotNull(rebuilt);
+        Assert.Equal(5, rebuilt.Version);
+    }
+
+    [Fact]
+    public async Task HighwayZoomIndexService_SyncIndexesForShard_AddsTrailBackboneOnlyShard()
+    {
+        var store = new InMemoryShardIndexStore();
+        var path = HighwayZoomIndexService.GetIndexPath(7, 68, 38);
+        var index = new HighwayTileShardIndex(5, 7, 68, 38, false, []);
+        store.Entries[path] = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(index, JsonOptions);
+        var shard = CreateShardWithTaggedFeature(
+            ("highway", "track"),
+            ("sac_scale", "hiking"));
+        var service = new HighwayZoomIndexService(
+            store,
+            new FakeShardRepository(null),
+            NullLogger<HighwayZoomIndexService>.Instance,
+            canonicalZoom: Zoom);
+
+        await service.SyncIndexesForShardAsync(2200, 1220, shard, CancellationToken.None);
+
+        var updated = JsonSerializer.Deserialize<HighwayTileShardIndex>(store.Entries[path], JsonOptions);
+        Assert.NotNull(updated);
+        Assert.Contains(updated.Shards, reference => reference.X == 2200 && reference.Y == 1220);
     }
 
     [Fact]
@@ -131,6 +196,24 @@ public sealed class ShardIndexStoreTests : IDisposable
             Type = ShardFeatureType.LineString,
             Geometry = [],
             Tags = [new ShardTag { KeyId = ShardEncodingIds.TagIdFromString("highway"), ValueId = ShardEncodingIds.TagIdFromString("primary") }]
+        });
+        return shard;
+    }
+
+    private static Shard CreateShardWithTaggedFeature(params (string Key, string Value)[] tags)
+    {
+        var shard = new Shard();
+        shard.Owned.Add(new ShardFeature
+        {
+            Id = ShardEncodingIds.FeatureIdFromString("way-trail"),
+            OsmId = "way-trail",
+            Type = ShardFeatureType.LineString,
+            Geometry = [],
+            Tags = [.. tags.Select(tag => new ShardTag
+            {
+                KeyId = ShardEncodingIds.TagIdFromString(tag.Key),
+                ValueId = ShardEncodingIds.TagIdFromString(tag.Value)
+            })]
         });
         return shard;
     }

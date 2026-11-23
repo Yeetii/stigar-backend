@@ -1,4 +1,5 @@
 using BAMCIS.GeoJSON;
+using Stigar.Core.Models;
 using Stigar.Core.Services.Shards;
 
 namespace Stigar.Core.Tests;
@@ -122,6 +123,75 @@ public class HighwayZoomRulesTests
     {
         Assert.False(HighwayZoomRules.ShouldKeepFeature(CreateFeature("cycleway"), 10));
         Assert.True(HighwayZoomRules.ShouldKeepFeature(CreateFeature("cycleway"), 11));
+    }
+
+    [Fact]
+    public void ShardFeatureZoomRules_MatchRawFeatureRules_ForTrailBackbone()
+    {
+        Assert.Equal(
+            HighwayZoomRules.ShouldKeepFeature(CreateFeature("path"), 7),
+            HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("path"), 7));
+        Assert.Equal(
+            HighwayZoomRules.ShouldKeepFeature(CreateFeature("track", trailVisibility: "bad"), 7),
+            HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("track", trailVisibility: "bad"), 7));
+        Assert.True(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("track"), 7));
+        Assert.True(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("path", trailVisibility: "bad"), 9));
+    }
+
+    [Fact]
+    public void ShardFeatureZoomRules_MatchRawFeatureRules_ForSnowmobileAndInformal()
+    {
+        Assert.Equal(
+            HighwayZoomRules.ShouldKeepFeature(CreateFeature(highway: null, snowmobile: "yes"), 7),
+            HighwayZoomRules.ShouldKeepFeature(CreateShardFeature(highway: null, snowmobile: "yes"), 7));
+        Assert.True(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature(highway: null, snowmobile: "designated"), 7));
+
+        Assert.Equal(
+            HighwayZoomRules.ShouldKeepFeature(CreateFeature("path", informal: "yes"), 12),
+            HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("path", informal: "yes"), 12));
+        Assert.False(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("path", informal: "yes"), 12));
+        Assert.True(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("path", informal: "yes"), 13));
+
+        Assert.Equal(
+            HighwayZoomRules.ShouldKeepFeature(CreateFeature("footway", footway: "informal"), 12),
+            HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("footway", footway: "informal"), 12));
+        Assert.False(HighwayZoomRules.ShouldKeepFeature(CreateShardFeature("footway", footway: "informal"), 12));
+    }
+
+    private static ShardFeature CreateShardFeature(
+        string? highway,
+        string? trailVisibility = null,
+        string? sacScale = null,
+        string? snowmobile = null,
+        string? informal = null,
+        string? footway = null)
+    {
+        var tags = new List<ShardTag>();
+        void Add(string key, string? value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                tags.Add(new ShardTag
+                {
+                    KeyId = ShardEncodingIds.TagIdFromString(key),
+                    ValueId = ShardEncodingIds.TagIdFromString(value)
+                });
+        }
+
+        Add("highway", highway);
+        Add("trail_visibility", trailVisibility);
+        Add("sac_scale", sacScale);
+        Add("snowmobile", snowmobile);
+        Add("informal", informal);
+        Add("footway", footway);
+
+        return new ShardFeature
+        {
+            Id = ShardEncodingIds.FeatureIdFromString($"shard-{highway ?? "snowmobile"}"),
+            OsmId = "way-1",
+            Type = ShardFeatureType.LineString,
+            Geometry = [],
+            Tags = [.. tags]
+        };
     }
 
     private static Feature CreateFeature(
