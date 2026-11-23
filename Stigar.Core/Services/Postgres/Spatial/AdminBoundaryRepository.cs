@@ -44,17 +44,21 @@ public sealed class AdminBoundaryRepository(NpgsqlDataSource dataSource) : IAdmi
             metrics_version = EXCLUDED.metrics_version
         """;
 
-    // Drive from the point list into a LATERAL index lookup per point. An EXISTS over unnest
-    // scans every boundary in the level and tests it against every point (rows x points).
+    // Drive from the point list into a LATERAL index lookup per point, then collapse to one row
+    // per boundary before computing its centroid. Computing ST_Centroid for every point/match
+    // pair dominated the worker's db phase on large level-4 geometries.
     internal const string ContainingAnySummarySql = """
-        SELECT DISTINCT area.id, area.properties,
+        SELECT area.id, area.properties,
                ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
-        FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
-        CROSS JOIN LATERAL (
-            SELECT id, properties, geom
-            FROM admin_boundaries ab
-            WHERE (@admin_level IS NULL OR ab.admin_level = @admin_level)
-              AND ST_Intersects(ab.geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+        FROM (
+            SELECT DISTINCT ON (match.id) match.id, match.properties, match.geom
+            FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            CROSS JOIN LATERAL (
+                SELECT id, properties, geom
+                FROM admin_boundaries ab
+                WHERE (@admin_level IS NULL OR ab.admin_level = @admin_level)
+                  AND ST_Intersects(ab.geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+            ) AS match
         ) AS area
         """;
 

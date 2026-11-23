@@ -38,17 +38,21 @@ public sealed class ProtectedAreaRepository(NpgsqlDataSource dataSource) : IProt
     private const string ContainingPredicate =
         " WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(@lng, @lat), 4326))";
 
-    // Drive from the point list into a LATERAL index lookup per point. An EXISTS over unnest
-    // instead scans the whole table and tests every point against every area (rows x points),
-    // which blows past the command timeout for long routes even though the GiST index exists.
+    // Drive from the point list into a LATERAL index lookup per point, then collapse to one row
+    // per area before computing its centroid. An EXISTS over unnest instead scans the whole table
+    // and tests every point against every area (rows x points), which blows past the command
+    // timeout for long routes; recomputing the centroid per match is the other major cost.
     internal const string ContainingAnySummarySql = """
-        SELECT DISTINCT area.id, area.properties,
+        SELECT area.id, area.properties,
                ST_X(ST_Centroid(area.geom)) AS cx, ST_Y(ST_Centroid(area.geom)) AS cy
-        FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
-        CROSS JOIN LATERAL (
-            SELECT id, properties, geom
-            FROM protected_areas
-            WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+        FROM (
+            SELECT DISTINCT ON (match.id) match.id, match.properties, match.geom
+            FROM unnest(@lngs::float8[], @lats::float8[]) AS q(lng, lat)
+            CROSS JOIN LATERAL (
+                SELECT id, properties, geom
+                FROM protected_areas
+                WHERE ST_Intersects(geom, ST_SetSRID(ST_MakePoint(q.lng, q.lat), 4326))
+            ) AS match
         ) AS area
         """;
 

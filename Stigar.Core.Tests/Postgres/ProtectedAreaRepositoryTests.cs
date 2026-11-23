@@ -103,6 +103,9 @@ public sealed class ProtectedAreaRepositoryTests(PostgisFixture fixture)
         Assert.True(
             plan.Any(line => line.Contains("idx_protected_areas_geom", StringComparison.Ordinal)),
             string.Join("\n", plan));
+        Assert.False(
+            plan.Any(line => line.Contains("st_centroid", StringComparison.Ordinal)),
+            "ST_Centroid must run once per area after deduplication, not once per point/area match: " + string.Join("\n", plan));
     }
 
     private Task InsertAreaAsync(

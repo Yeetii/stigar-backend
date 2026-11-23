@@ -110,8 +110,6 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
 
         await using var connection = await fixture.DataSource.OpenConnectionAsync();
         await using var transaction = await connection.BeginTransactionAsync();
-        await using (var disableSeqScan = new NpgsqlCommand("SET LOCAL enable_seqscan = off", connection, transaction))
-            await disableSeqScan.ExecuteNonQueryAsync();
 
         await using var explain = new NpgsqlCommand(
             "EXPLAIN " + AdminBoundaryRepository.ContainingAnySummarySql, connection, transaction);
@@ -127,6 +125,9 @@ public sealed class AdminBoundaryRepositoryTests(PostgisFixture fixture)
         Assert.True(
             plan.Any(line => line.Contains("idx_admin_boundaries_geom", StringComparison.Ordinal)),
             string.Join("\n", plan));
+        Assert.False(
+            plan.Any(line => line.Contains("st_centroid", StringComparison.Ordinal)),
+            "ST_Centroid must run once per boundary after deduplication, not once per point/boundary match: " + string.Join("\n", plan));
     }
 
     [SkippableFact]
