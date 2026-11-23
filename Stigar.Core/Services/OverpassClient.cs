@@ -37,10 +37,12 @@ namespace Stigar.Core.Services
         private static readonly TimeSpan MirrorCooldown = TimeSpan.FromMinutes(5);
         private static readonly ConcurrentDictionary<string, MirrorHealth> MirrorHealthByUrl = new(StringComparer.Ordinal);
 
+        // Declaration order is the attempt order: the preferred mirror is always tried first
+        // (unless its circuit is open) and the others are fallbacks in the order listed.
         private readonly string[] mirrors = [
+            "https://overpass.nextgis.com/api/interpreter",
             "https://overpass.openstreetmap.fr/api/interpreter",
-            "https://overpass-api.de/api/interpreter",
-            "https://overpass.nextgis.com/api/interpreter"
+            "https://overpass-api.de/api/interpreter"
         ];
 
 
@@ -301,10 +303,8 @@ namespace Stigar.Core.Services
                 .ToArray();
 
             // If every mirror is cooling down, probe them all so the service can recover.
-            var candidates = available.Length > 0 ? available : mirrors;
-            var ordered = (string[])candidates.Clone();
-            Random.Shared.Shuffle(ordered);
-            return ordered;
+            // No shuffling: callers rely on the preferred mirror being tried first.
+            return available.Length > 0 ? available : mirrors;
         }
 
         private static void RecordMirrorSuccess(string mirror)

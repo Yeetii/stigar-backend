@@ -145,4 +145,32 @@ public class PolygonRingAssemblerTests
         Assert.True(RouteFeatureMatcher.IsPointInGeometry(insidePoint, polygon));
         Assert.False(RouteFeatureMatcher.IsPointInGeometry(outsidePoint, polygon));
     }
+
+    [Fact]
+    public void AnyPointInGeometry_MatchesAnyPointAgainstAnyRing()
+    {
+        var first = Square(0, 0, 2, 2);
+        var second = Square(10, 10, 12, 12);
+        var multi = new MultiPolygon([first, second], null);
+
+        Assert.True(RouteFeatureMatcher.AnyPointInGeometry(
+            [new Stigar.Core.Models.Coordinate(20, 20), new Stigar.Core.Models.Coordinate(11, 11)], multi));
+        Assert.False(RouteFeatureMatcher.AnyPointInGeometry(
+            [new Stigar.Core.Models.Coordinate(20, 20), new Stigar.Core.Models.Coordinate(30, 30)], multi));
+    }
+
+    private static Polygon Square(double minLng, double minLat, double maxLng, double maxLat)
+        => new(
+            [
+                new LinearRing(
+                    [
+                        new Position(minLng, minLat),
+                        new Position(maxLng, minLat),
+                        new Position(maxLng, maxLat),
+                        new Position(minLng, maxLat),
+                        new Position(minLng, minLat)
+                    ],
+                    null)
+            ],
+            null);
 }

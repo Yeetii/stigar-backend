@@ -35,6 +35,48 @@ public class HangfireConsoleLoggingTests
         }
     }
 
+    private sealed class FailOnceWriter : IJobConsoleWriter
+    {
+        public int Calls { get; private set; }
+
+        public void WriteLine(string message)
+        {
+            Calls++;
+            if (Calls == 1)
+                throw new InvalidOperationException("redis timeout");
+        }
+    }
+
+    [Fact]
+    public void LoggerProvider_DoesNotThrow_WhenConsoleWriteFails()
+    {
+        var writer = new FailOnceWriter();
+
+        using (JobConsole.Begin(writer))
+        {
+            var logger = new HangfireConsoleLoggerProvider().CreateLogger("Test");
+            var exception = Record.Exception(() => logger.LogInformation("diagnostic line"));
+
+            Assert.Null(exception);
+        }
+    }
+
+    [Fact]
+    public void LoggerProvider_PausesConsoleWrites_AfterFailure()
+    {
+        var writer = new FailOnceWriter();
+
+        using (JobConsole.Begin(writer))
+        {
+            var logger = new HangfireConsoleLoggerProvider().CreateLogger("Test");
+            logger.LogInformation("first");
+            logger.LogInformation("second");
+
+            // The second line must be skipped while the sink is cooling down.
+            Assert.Equal(1, writer.Calls);
+        }
+    }
+
     [Fact]
     public void LoggerProvider_ForwardsInformationLine_WhenJobConsoleIsActive()
     {

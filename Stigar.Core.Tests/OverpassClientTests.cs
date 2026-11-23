@@ -17,6 +17,30 @@ public class OverpassClientTests
     }
 
     [Fact]
+    public void GetMirrorsInAttemptOrder_PreservesDeclarationOrder()
+    {
+        using var httpClient = new HttpClient();
+        var client = new OverpassClient(httpClient, NullLogger<OverpassClient>.Instance);
+        string[] urls = [
+            "https://first.example/api/interpreter",
+            "https://second.example/api/interpreter",
+            "https://third.example/api/interpreter"
+        ];
+        SetMirrors(client, urls);
+
+        Assert.Equal(urls, GetMirrorOrder(client));
+    }
+
+    [Fact]
+    public void DefaultMirrors_StartWithNextGis()
+    {
+        using var httpClient = new HttpClient();
+        var client = new OverpassClient(httpClient, NullLogger<OverpassClient>.Instance);
+
+        Assert.Equal("https://overpass.nextgis.com/api/interpreter", GetMirrorOrder(client)[0]);
+    }
+
+    [Fact]
     public async Task GetHighways_IgnoresSingleEmptyMirrorWhenLaterMirrorHasData()
     {
         using var httpClient = new HttpClient(new MirrorHttpMessageHandler(new Dictionary<string, object[]>

@@ -60,6 +60,13 @@ public sealed class HangfireConsoleLoggerProvider : ILoggerProvider
 
     private sealed class JobConsoleLogger : ILogger
     {
+        // Hangfire.Console writes synchronously to Redis. Logger.Log turns a provider
+        // exception into an AggregateException in the caller, so a Redis timeout here would
+        // fail the job being observed. On failure, pause console forwarding briefly so a
+        // struggling Redis is not hammered by every remaining log line of every worker.
+        private const int CooldownMs = 10_000;
+        private long _disabledUntilTick;
+
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
@@ -71,6 +78,22 @@ public sealed class HangfireConsoleLoggerProvider : ILoggerProvider
             if (writer is null || !IsEnabled(logLevel))
                 return;
 
+            if (Environment.TickCount64 < Interlocked.Read(ref _disabledUntilTick))
+                return;
+
+            try
+            {
+                Write(writer, logLevel, state, exception, formatter);
+            }
+            catch (Exception)
+            {
+                Interlocked.Exchange(ref _disabledUntilTick, Environment.TickCount64 + CooldownMs);
+            }
+        }
+
+        private static void Write<TState>(IJobConsoleWriter writer, LogLevel logLevel, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
             var message = formatter(state, exception);
             if (exception is not null)
                 message = $"{message}{Environment.NewLine}{exception}";

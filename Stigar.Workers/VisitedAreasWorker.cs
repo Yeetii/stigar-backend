@@ -265,14 +265,8 @@ public class VisitedAreasWorker(
     }
 
     private static bool ActivityVisitsArea(List<Coordinate> activityPoints, Geometry geometry)
-    {
-        foreach (var idx in GetSampledIndices(activityPoints.Count))
-        {
-            if (RouteFeatureMatcher.IsPointInGeometry(activityPoints[idx], geometry))
-                return true;
-        }
-        return false;
-    }
+        => RouteFeatureMatcher.AnyPointInGeometry(
+            GetSampledIndices(activityPoints.Count).Select(idx => activityPoints[idx]), geometry);
 
     private static IEnumerable<int> GetSampledIndices(int count)
     {
@@ -435,15 +429,7 @@ public class VisitedAreasWorker(
     private static bool ActivityIntersectsBoundary(
         IEnumerable<Coordinate> activityPoints,
         Geometry geometry)
-    {
-        foreach (var point in activityPoints)
-        {
-            if (RouteFeatureMatcher.IsPointInGeometry(point, geometry))
-                return true;
-        }
-
-        return false;
-    }
+        => RouteFeatureMatcher.AnyPointInGeometry(activityPoints, geometry);
 
     private static IEnumerable<Coordinate> SampleCoordinatesForAdminBoundaryLookup(List<Coordinate> activityPoints)
     {

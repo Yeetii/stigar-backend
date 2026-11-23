@@ -46,6 +46,33 @@ public static class RouteFeatureMatcher
         return false;
     }
 
+    /// <summary>
+    /// Returns true when any supplied point lies inside the geometry. Ring bounds are
+    /// computed once per ring rather than once per point — on a large multipolygon the
+    /// per-point Min/Max passes dominate the worker's calculation phase. Single-point
+    /// callers should keep using <see cref="IsPointInGeometry"/> so they can exit early.
+    /// </summary>
+    public static bool AnyPointInGeometry(IEnumerable<Coordinate> points, Geometry geometry)
+    {
+        var rings = GetOuterRings(geometry)
+            .Select(ring => (Ring: ring, Bounds: GetBounds(ring, 0)))
+            .ToArray();
+
+        if (rings.Length == 0)
+            return false;
+
+        foreach (var point in points)
+        {
+            foreach (var (ring, bounds) in rings)
+            {
+                if (Contains(bounds, point) && PointInPolygon(point, ring))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
     public static bool RouteIntersectsPolygon(string polylineString, Geometry geometry)
     {
         var routeCoordinates = GeoSpatialFunctions.DecodePolyline(polylineString).ToList();

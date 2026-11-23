@@ -20,7 +20,9 @@ namespace Stigar.Workers
         IBackendAdminQueries queries,
         IJobEpochService epochs) : IQueueActivityJobs
     {
-        private const int PollBatchSize = 4000;
+        // Each activity can produce at most one job of each type (summits, paths, areas),
+        // so this caps every poll at 1000 jobs per type.
+        private const int PollBatchSize = 1000;
 
         public async Task Run(
             IReadOnlyList<Activity> updatedActivities,

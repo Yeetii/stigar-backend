@@ -1,10 +1,38 @@
+using Hangfire;
+using Moq;
+using Stigar.Core.Jobs;
 using Stigar.Core.Models;
+using Stigar.Core.Services.Postgres;
+using Stigar.Core.Services.Postgres.Admin;
 
 namespace Stigar.Workers.Tests;
 
 public class QueueActivityJobsTests
 {
     private const long Epoch = 1;
+
+    [Fact]
+    public async Task PollAndQueueAsync_LimitsPollToOneThousandActivities()
+    {
+        var jobs = new Mock<IBackgroundJobClient>();
+        var activities = new Mock<IActivityRepository>();
+        var queries = new Mock<IBackendAdminQueries>();
+        var epochs = new Mock<IJobEpochService>();
+
+        epochs.Setup(e => e.GetAsync(It.IsAny<JobEpochType>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(Epoch);
+        queries.Setup(q => q.GetActivityIdsNeedingProcessing(
+                It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync([]);
+
+        var poller = new QueueActivityJobs(jobs.Object, activities.Object, queries.Object, epochs.Object);
+
+        await poller.PollAndQueueAsync(CancellationToken.None);
+
+        // One job of each type per activity, so this caps each type at 1000 per poll.
+        queries.Verify(q => q.GetActivityIdsNeedingProcessing(
+            It.IsAny<long>(), It.IsAny<long>(), It.IsAny<long>(), 1000, It.IsAny<CancellationToken>()), Times.Once);
+    }
 
     [Fact]
     public void ShouldQueueAnyStage_ReturnsTrue_WhenProcessingStatusIsMissing()
