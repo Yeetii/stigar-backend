@@ -18,8 +18,11 @@ public sealed class PostgisFixture : IAsyncLifetime
     public PostgisFixture()
     {
         var initScript = Path.Combine(AppContext.BaseDirectory, "Postgres", "01-init.sql");
+        var indexScript = Path.Combine(
+            AppContext.BaseDirectory, "Postgres", "06-add-activity-processing-indexes.sql");
         _container = new PostgreSqlBuilder("postgis/postgis:16-3.4")
             .WithResourceMapping(FilePath.Of(initScript), DirectoryPath.Of("/docker-entrypoint-initdb.d/"))
+            .WithResourceMapping(FilePath.Of(indexScript), DirectoryPath.Of("/docker-entrypoint-initdb.d/"))
             .Build();
     }
 

@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <Content Include="../deploy/init-db/01-init.sql" Link="Postgres/01-init.sql" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../deploy/init-db/06-add-activity-processing-indexes.sql" Link="Postgres/06-add-activity-processing-indexes.sql" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

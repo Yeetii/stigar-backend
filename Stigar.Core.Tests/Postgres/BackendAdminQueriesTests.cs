@@ -90,6 +90,32 @@ public sealed class BackendAdminQueriesTests(PostgisFixture fixture)
     }
 
     [SkippableFact]
+    public async Task ActivityProcessingPoll_HasExpressionIndexesForStageEpochs()
+    {
+        fixture.RequireDocker();
+
+        await using var command = fixture.DataSource.CreateCommand(
+            """
+            SELECT indexname FROM pg_indexes
+            WHERE schemaname = current_schema()
+              AND tablename = 'activities'
+              AND indexname LIKE 'idx_activities_%_epoch'
+            ORDER BY indexname
+            """);
+        await using var reader = await command.ExecuteReaderAsync();
+        var indexes = new List<string>();
+        while (await reader.ReadAsync())
+            indexes.Add(reader.GetString(0));
+
+        Assert.Equal(
+        [
+            "idx_activities_areas_epoch",
+            "idx_activities_paths_epoch",
+            "idx_activities_summits_epoch",
+        ], indexes);
+    }
+
+    [SkippableFact]
     public async Task MarkMethods_StampQueuedAtAndHideRowsFromPolls()
     {
         await fixture.ResetAsync();

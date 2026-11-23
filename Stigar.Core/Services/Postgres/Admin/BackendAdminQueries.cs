@@ -16,6 +16,10 @@ public sealed class BackendAdminQueries(NpgsqlDataSource dataSource) : IBackendA
     // cover a slow backfill, short enough that a genuinely lost job is eventually retried.
     private const int QueueWindowHours = 24;
 
+    // Poll-style admin scans can take longer than Npgsql's 30s default while the table grows.
+    // Keep the headroom below the 5-minute poll interval so overlapping runs cannot pile up.
+    private const int AdminQueryTimeoutSeconds = 120;
+
     private const string ActivityProjectionsSql = """
         SELECT id, user_id, sport_type, processing_status
         FROM activities
@@ -247,6 +251,7 @@ public sealed class BackendAdminQueries(NpgsqlDataSource dataSource) : IBackendA
         NpgsqlCommand command,
         CancellationToken cancellationToken)
     {
+        command.CommandTimeout = AdminQueryTimeoutSeconds;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         var result = new List<string>();
         while (await reader.ReadAsync(cancellationToken))

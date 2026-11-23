@@ -240,6 +240,21 @@ The previous tag is written to `.env.previous` before each deploy:
 grep IMAGE_TAG /opt/stacks/strava/.env.previous
 ```
 
+### Applying a new `init-db` script to an existing database
+
+`deploy/init-db/*.sql` is mounted at `/docker-entrypoint-initdb.d`, which PostgreSQL
+runs only when the data directory is empty. A newly added script therefore does
+not run on an existing `POSTGRES_DATA_DIR` during a normal deploy. Apply it once
+manually, substituting the real user and database if they differ from the
+defaults:
+
+```bash
+docker compose exec -T postgres psql -U strava -d strava \
+  -f /docker-entrypoint-initdb.d/06-add-activity-processing-indexes.sql
+```
+
+The scripts use `IF NOT EXISTS`, so re-running them is safe.
+
 ---
 
 ## Enabling workers
