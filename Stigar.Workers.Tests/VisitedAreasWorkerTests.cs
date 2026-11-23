@@ -114,7 +114,14 @@ public class VisitedAreasWorkerTests
 
         var protectedAreas = new Mock<IProtectedAreaRepository>();
         protectedAreas
-            .Setup(r => r.FindContainingPoint(It.IsAny<Coordinate>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.FindSummariesContainingAnyPoint(
+                It.IsAny<IEnumerable<Coordinate>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync([
+                new StoredFeatureSummary { Id = areaId, Kind = FeatureKinds.ProtectedArea }
+            ]);
+        protectedAreas
+            .Setup(r => r.GetByIds(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([area]);
 
         var adminBoundaries = new Mock<IAdminBoundaryRepository>();
@@ -149,7 +156,12 @@ public class VisitedAreasWorkerTests
 
         protectedAreas.Verify(
             r => r.FindContainingPoint(It.IsAny<Coordinate>(), It.IsAny<CancellationToken>()),
-            Times.AtLeastOnce);
+            Times.Never);
+        protectedAreas.Verify(
+            r => r.FindSummariesContainingAnyPoint(
+                It.IsAny<IEnumerable<Coordinate>>(),
+                It.IsAny<CancellationToken>()),
+            Times.Once);
         visitedAreas.Verify(r => r.RemoveByActivity(activityId, It.IsAny<CancellationToken>()), Times.Once);
         visitedAreas.Verify(
             r => r.AddRange(
@@ -217,8 +229,15 @@ public class VisitedAreasWorkerTests
 
         var protectedAreas = new Mock<IProtectedAreaRepository>();
         protectedAreas
-            .Setup(r => r.FindContainingPoint(It.IsAny<Coordinate>(), It.IsAny<CancellationToken>()))
+            .Setup(r => r.FindSummariesContainingAnyPoint(
+                It.IsAny<IEnumerable<Coordinate>>(),
+                It.IsAny<CancellationToken>()))
             .Callback(() => callOrder.Add("queryProtected"))
+            .ReturnsAsync([
+                new StoredFeatureSummary { Id = area.Id, Kind = FeatureKinds.ProtectedArea }
+            ]);
+        protectedAreas
+            .Setup(r => r.GetByIds(It.IsAny<IEnumerable<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync([area]);
 
         var adminBoundaries = new Mock<IAdminBoundaryRepository>();

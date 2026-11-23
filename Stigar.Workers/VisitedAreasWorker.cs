@@ -330,19 +330,16 @@ public class VisitedAreasWorker(
             ingestion.UpsertMs,
             ingestion.TileDbMs);
 
+        // A single ST_Intersects query over all route points replaces one query per point.
+        // The batch lookup returns only summaries, so load the full features (geometry included)
+        // by id in one more query; FindVisitedProtectedAreas needs the geometry for its local check.
         var areasById = await timings.MeasureAsync("db", async () =>
         {
-            var result = new Dictionary<string, StoredFeature>(StringComparer.Ordinal);
-            foreach (var points in decodedRoutes)
-            {
-                foreach (var point in points)
-                {
-                    var containing = await _protectedAreasRepository.FindContainingPoint(point, cancellationToken);
-                    foreach (var area in containing)
-                        result[area.Id] = area;
-                }
-            }
-            return result;
+            var summaries = await _protectedAreasRepository.FindSummariesContainingAnyPoint(routePoints, cancellationToken);
+            var areas = await _protectedAreasRepository.GetByIds(
+                summaries.Select(summary => summary.Id),
+                cancellationToken);
+            return areas.ToDictionary(area => area.Id, StringComparer.Ordinal);
         });
         _logger.LogDebug("Found {Count} nearby protected areas", areasById.Count);
         return areasById.Values;
