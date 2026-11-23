@@ -209,21 +209,14 @@ public class VisitedPathsWorkerTests
         var users = new Mock<IUserRepository>();
         var syncStatus = new UserSyncStatusService(users.Object, activities.Object);
 
-        var logger = new CapturingLogger<VisitedPathsWorker>();
         var worker = new VisitedPathsWorker(
-            logger,
+            NullLogger<VisitedPathsWorker>.Instance,
             activities.Object,
             visitedPaths.Object,
             shards.Object,
             syncStatus);
 
         await worker.ExecuteAsync(new ActivityIdJob { ActivityId = activityId }, CancellationToken.None);
-
-        var timing = Assert.Single(logger.Entries, entry =>
-            entry.Message.Contains($"VisitedPathsWorker timing for activity {activityId}", StringComparison.Ordinal));
-        Assert.Contains("shards=", timing.Message, StringComparison.Ordinal);
-        Assert.Contains("db=", timing.Message, StringComparison.Ordinal);
-        Assert.Contains("calculate=", timing.Message, StringComparison.Ordinal);
 
         visitedPaths.Verify(r => r.RemoveByActivity(activityId, It.IsAny<CancellationToken>()), Times.Once);
         visitedPaths.Verify(

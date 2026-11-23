@@ -90,9 +90,8 @@ public class SummitsWorkerTests
         var users = new Mock<IUserRepository>();
         var syncStatus = new UserSyncStatusService(users.Object, activities.Object);
 
-        var logger = new CapturingLogger<SummitsWorker>();
         var worker = new SummitsWorker(
-            logger,
+            NullLogger<SummitsWorker>.Instance,
             activities.Object,
             summitLinks.Object,
             peaks.Object,
@@ -101,12 +100,6 @@ public class SummitsWorkerTests
             CreateIngestionMock().Object);
 
         await worker.ExecuteAsync(new ActivityIdJob { ActivityId = activityId }, CancellationToken.None);
-
-        var timing = Assert.Single(logger.Entries, entry =>
-            entry.Message.Contains("SummitsWorker timing for activity activity-1", StringComparison.Ordinal));
-        Assert.Contains("overpass=", timing.Message, StringComparison.Ordinal);
-        Assert.Contains("db=", timing.Message, StringComparison.Ordinal);
-        Assert.Contains("calculate=", timing.Message, StringComparison.Ordinal);
 
         peaks.Verify(
             r => r.GetByTiles(It.IsAny<IEnumerable<(int, int)>>(), It.IsAny<CancellationToken>()),

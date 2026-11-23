@@ -60,18 +60,4 @@ public class RecurringJobRegistrationTests
         Assert.Equal(2, queues.Count);
         Assert.All(queues, queue => Assert.Equal(AppConfig.RecurringJobsQueueName, queue));
     }
-
-    private sealed class ProbeRecurringJob : IRecurringJob
-    {
-        public string JobId => "probe";
-        public string Cron => "0 0 * * *";
-        public Task ExecuteAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-    }
-
-    private sealed class SecondProbeRecurringJob : IRecurringJob
-    {
-        public string JobId => "probe-2";
-        public string Cron => "0 1 * * *";
-        public Task ExecuteAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-    }
 }

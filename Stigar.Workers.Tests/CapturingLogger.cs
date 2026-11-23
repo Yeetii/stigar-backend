@@ -2,7 +2,7 @@ using Microsoft.Extensions.Logging;
 
 namespace Stigar.Workers.Tests;
 
-internal sealed class CapturingLogger<T> : ILogger<T>
+internal sealed class CapturingLogger : ILogger
 {
     public List<(LogLevel Level, string Message)> Entries { get; } = [];
 
